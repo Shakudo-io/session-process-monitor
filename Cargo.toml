@@ -6,7 +6,7 @@ authors = ["Shakudo Inc."]
 description = "Terminal UI for monitoring per-process memory, CPU, and disk I/O in Kubernetes session pods"
 license = "Apache-2.0"
 repository = "https://github.com/Shakudo-io/session-process-monitor"
-keywords = ["tui", "monitoring", "kubernetes", "process", "memory", "cpu", "profiling"]
+keywords = ["tui", "monitoring", "kubernetes", "process", "profiling"]
 categories = ["command-line-utilities", "development-tools::profiling"]
 readme = "README.md"
 
