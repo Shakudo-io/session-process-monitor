@@ -17,6 +17,12 @@ A terminal UI for monitoring per-process memory, CPU, and disk I/O usage inside 
 
 ## Installation
 
+### Cargo (Recommended)
+
+```bash
+cargo install session-process-monitor
+```
+
 ### Pre-built Binary
 
 Download from [Releases](https://github.com/Shakudo-io/session-process-monitor/releases).
@@ -114,9 +120,3 @@ Contributions welcome! Please open an issue or PR.
 ---
 
 Built with [ratatui](https://github.com/ratatui-org/ratatui) 🐀
-
-For a static MUSL binary, use:
-
-```bash
-./scripts/build-musl.sh
-```
