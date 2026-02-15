@@ -115,40 +115,6 @@ Contributions welcome! Please open an issue or PR.
 
 Built with [ratatui](https://github.com/ratatui-org/ratatui) 🐀
 
-## Keybindings
-
-| Key | Action |
-| --- | ------ |
-| q | Quit |
-| k | Kill selected process |
-| s | Cycle sort column |
-| S / r | Toggle sort direction |
-| / | Enter filter mode |
-| Esc | Clear filter (when filtering) |
-| ↑ / ↓ | Move selection |
-
-## Metrics
-
-- **USS**: Unique Set Size — private memory unique to the process.
-- **PSS**: Proportional Set Size — shared memory proportionally attributed.
-- **RSS**: Resident Set Size — total resident memory for the process.
-- **Growth Rate**: Change in USS over time, shown as MB per minute.
-- **CPU%**: Process CPU usage as a percentage of a core.
-
-## System Process Warning
-
-System processes are dimmed in the table. If you attempt to kill a system process, the status bar shows a red warning because terminating these can break the session.
-
-## Memory Gauge
-
-The gauge compares cgroup memory usage against the pod’s memory limit. It also shows the sum of process RSS for context. The vertical danger marker corresponds to the configured terminator threshold (via `HYPERPLANE_SESSION_PROCESS_TERMINATOR_THRESHOLD_PERCENT`).
-
-## Build
-
-```bash
-cargo build --release
-```
-
 For a static MUSL binary, use:
 
 ```bash
