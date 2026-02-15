@@ -1,6 +1,6 @@
 [package]
 name = "session-process-monitor"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Shakudo Inc."]
 description = "Terminal UI for monitoring per-process memory, CPU, and disk I/O in Kubernetes session pods"
