@@ -79,6 +79,7 @@ pub struct App {
     pub mode: AppMode,
     pub recording_manager: recording::RecordingManager,
     pub watched_pids: HashSet<u32>,
+    pub show_cmdline: Option<(u32, String, String)>,
 }
 
 impl App {
@@ -111,6 +112,7 @@ impl App {
             mode: AppMode::Live,
             recording_manager: recording::RecordingManager::new(),
             watched_pids: HashSet::new(),
+            show_cmdline: None,
         }
     }
 

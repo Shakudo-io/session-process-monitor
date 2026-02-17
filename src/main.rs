@@ -61,6 +61,8 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                         }
                         _ => {}
                     }
+                } else if app.show_cmdline.is_some() {
+                    app.show_cmdline = None;
                 } else {
                     let mut recording_to_load: Option<String> = None;
                     let mut recording_to_delete: Option<String> = None;
@@ -183,6 +185,15 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                                     }
                                     KeyCode::Char('/') => {
                                         app.view_state.filter_active = true;
+                                    }
+                                    KeyCode::Enter => {
+                                        if let Some(process) = app.selected_process() {
+                                            app.show_cmdline = Some((
+                                                process.pid,
+                                                process.name.clone(),
+                                                process.cmdline.clone(),
+                                            ));
+                                        }
                                     }
                                     KeyCode::Char('R') => {
                                         let recordings = app.recording_manager.list_recordings();

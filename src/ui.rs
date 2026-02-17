@@ -23,6 +23,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let AppMode::RecordingList(list_state) = &app.mode {
         draw_recording_list_modal(frame, list_state);
     }
+
+    if let Some((pid, name, cmdline)) = &app.show_cmdline {
+        draw_cmdline_modal(frame, *pid, name, cmdline);
+    }
 }
 
 fn draw_live(frame: &mut Frame, app: &App) {
@@ -210,6 +214,29 @@ fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState)
         table_state.select(Some(selected));
     }
     frame.render_stateful_widget(table, area, &mut table_state);
+}
+
+fn draw_cmdline_modal(frame: &mut Frame, pid: u32, name: &str, cmdline: &str) {
+    let area = centered_rect(80, 40, frame.area());
+    frame.render_widget(Clear, area);
+
+    let title = format!("PID {} — {} (any key to close)", pid, name);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(ACCENT))
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(BG));
+
+    let content = Paragraph::new(cmdline.to_string())
+        .style(Style::default().fg(FG))
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .block(block);
+    frame.render_widget(content, area);
 }
 
 fn render_gauges(
