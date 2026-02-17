@@ -6,6 +6,14 @@ use ratatui::Frame;
 use crate::app::{App, PodMemorySnapshot, ProcessSnapshot, SortColumn};
 use crate::replay::{AppMode, RecordingListState, ReplayState};
 
+const BG: Color = Color::Rgb(24, 24, 32);
+const BG_ALT: Color = Color::Rgb(32, 32, 42);
+const FG: Color = Color::Rgb(200, 200, 210);
+const FG_DIM: Color = Color::Rgb(100, 100, 120);
+const BORDER: Color = Color::Rgb(60, 60, 80);
+const ACCENT: Color = Color::Rgb(100, 160, 255);
+const HIGHLIGHT_BG: Color = Color::Rgb(50, 50, 70);
+
 pub fn draw(frame: &mut Frame, app: &App) {
     match &app.mode {
         AppMode::Replay(state) => draw_replay(frame, app, state),
@@ -45,9 +53,12 @@ fn draw_live(frame: &mut Frame, app: &App) {
     );
 
     let (status_text, status_style) = status_line(app);
-    let status = Paragraph::new(status_text)
-        .style(status_style)
-        .block(Block::default().borders(Borders::ALL));
+    let status = Paragraph::new(status_text).style(status_style).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(BORDER))
+            .style(Style::default().bg(BG)),
+    );
     frame.render_widget(status, chunks[2]);
 }
 
@@ -87,7 +98,8 @@ fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
     );
     let header = Paragraph::new(header_text).style(
         Style::default()
-            .fg(Color::Cyan)
+            .fg(ACCENT)
+            .bg(BG_ALT)
             .add_modifier(Modifier::BOLD),
     );
     frame.render_widget(header, chunks[0]);
@@ -111,16 +123,31 @@ fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
         );
     } else {
         let placeholder = Paragraph::new("Recording has no snapshots.")
-            .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Replay"));
+            .style(Style::default().fg(Color::Yellow).bg(BG))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(BORDER))
+                    .title("Replay")
+                    .style(Style::default().bg(BG)),
+            );
         frame.render_widget(placeholder, chunks[2]);
-        frame.render_widget(Block::default().borders(Borders::ALL), chunks[1]);
+        frame.render_widget(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(BORDER))
+                .style(Style::default().bg(BG)),
+            chunks[1],
+        );
     }
 
     let (status_text, status_style) = status_line(app);
-    let status = Paragraph::new(status_text)
-        .style(status_style)
-        .block(Block::default().borders(Borders::ALL));
+    let status = Paragraph::new(status_text).style(status_style).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(BORDER))
+            .style(Style::default().bg(BG)),
+    );
     frame.render_widget(status, chunks[3]);
 }
 
@@ -130,19 +157,30 @@ fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState)
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .title("Recordings (Enter: select, d: delete, Esc: close)");
+        .border_style(Style::default().fg(ACCENT))
+        .title("Recordings (Enter: select, d: delete, Esc: close)")
+        .title_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(BG));
 
     if list_state.recordings.is_empty() {
         let empty =
             Paragraph::new("No recordings available. Recordings are saved when processes exit.")
-                .style(Style::default().fg(Color::Gray))
+                .style(Style::default().fg(FG_DIM))
                 .block(block);
         frame.render_widget(empty, area);
         return;
     }
 
-    let header = Row::new(vec!["Time", "Process", "Snapshots"])
-        .style(Style::default().add_modifier(Modifier::BOLD));
+    let header = Row::new(vec!["Time", "Process", "Snapshots"]).style(
+        Style::default()
+            .fg(ACCENT)
+            .bg(BG_ALT)
+            .add_modifier(Modifier::BOLD),
+    );
     let rows = list_state.recordings.iter().map(|recording| {
         Row::new(vec![
             format_timestamp(recording.end_time),
@@ -162,7 +200,7 @@ fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState)
     .header(header)
     .block(block)
     .column_spacing(1)
-    .row_highlight_style(Style::default().bg(Color::DarkGray));
+    .row_highlight_style(Style::default().bg(HIGHLIGHT_BG).fg(Color::White));
 
     let mut table_state = TableState::default();
     if !list_state.recordings.is_empty() {
@@ -187,7 +225,12 @@ fn render_gauges(
         .split(area);
 
     let mem_state = memory_gauge_state(pod_memory);
-    let mem_block = Block::default().borders(Borders::ALL).title("Pod Memory");
+    let mem_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(BORDER))
+        .title("Pod Memory")
+        .title_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BG));
     let mem_gauge = Gauge::default()
         .block(mem_block.clone())
         .ratio(mem_state.ratio)
@@ -199,7 +242,12 @@ fn render_gauges(
     }
 
     let cpu_state = cpu_gauge_state(processes, cpu_cores);
-    let cpu_block = Block::default().borders(Borders::ALL).title("CPU Usage");
+    let cpu_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(BORDER))
+        .title("CPU Usage")
+        .title_style(Style::default().fg(ACCENT))
+        .style(Style::default().bg(BG));
     let cpu_gauge = Gauge::default()
         .block(cpu_block)
         .ratio(cpu_state.ratio)
@@ -234,15 +282,21 @@ fn render_process_table(
         header_label("Read", SortColumn::DiskRead, sort_column, sort_ascending),
         header_label("Write", SortColumn::DiskWrite, sort_column, sort_ascending),
     ])
-    .style(Style::default().add_modifier(Modifier::BOLD));
+    .style(
+        Style::default()
+            .fg(ACCENT)
+            .bg(BG_ALT)
+            .add_modifier(Modifier::BOLD),
+    );
 
     let rows = processes.iter().map(|process| {
         let style = if process.is_system {
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(FG_DIM)
+                .bg(BG)
                 .add_modifier(Modifier::DIM)
         } else {
-            Style::default()
+            Style::default().fg(FG).bg(BG)
         };
 
         let growth_text = match process.growth_rate {
@@ -304,9 +358,16 @@ fn render_process_table(
         ],
     )
     .header(header)
-    .block(Block::default().borders(Borders::ALL).title("Processes"))
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(BORDER))
+            .title("Processes")
+            .title_style(Style::default().fg(ACCENT))
+            .style(Style::default().bg(BG)),
+    )
     .column_spacing(1)
-    .row_highlight_style(Style::default().bg(Color::DarkGray));
+    .row_highlight_style(Style::default().bg(HIGHLIGHT_BG).fg(Color::White));
 
     let mut table_state = TableState::default();
     if !processes.is_empty() {
