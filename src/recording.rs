@@ -42,6 +42,7 @@ pub struct RecordingManager {
     max_snapshots: usize,
     recordings_dir: PathBuf,
     last_saved_pids: HashMap<u32, Instant>,
+    max_storage_bytes: u64,
 }
 
 impl RecordingManager {
@@ -50,14 +51,20 @@ impl RecordingManager {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(300);
+        let max_storage_mb = env::var("SPM_RECORDING_MAX_SIZE_MB")
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(50);
         let recordings_dir = Self::ensure_recordings_dir();
         let manager = Self {
             buffer: VecDeque::with_capacity(max_snapshots),
             max_snapshots,
             recordings_dir,
             last_saved_pids: HashMap::new(),
+            max_storage_bytes: max_storage_mb * 1024 * 1024,
         };
         manager.cleanup_old_recordings();
+        manager.enforce_storage_cap();
         manager
     }
 
@@ -118,6 +125,7 @@ impl RecordingManager {
         file.flush().ok()?;
 
         self.last_saved_pids.insert(trigger_pid, now);
+        self.enforce_storage_cap();
         Some(recording.snapshots.len())
     }
 
@@ -192,6 +200,46 @@ impl RecordingManager {
             };
             if age > max_age {
                 let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    fn enforce_storage_cap(&self) {
+        let entries = match fs::read_dir(&self.recordings_dir) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+
+        let mut files: Vec<(PathBuf, u64, SystemTime)> = Vec::new();
+        let mut total_size: u64 = 0;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("bin") {
+                continue;
+            }
+            let metadata = match entry.metadata() {
+                Ok(metadata) => metadata,
+                Err(_) => continue,
+            };
+            let size = metadata.len();
+            let modified = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            total_size += size;
+            files.push((path, size, modified));
+        }
+
+        if total_size <= self.max_storage_bytes {
+            return;
+        }
+
+        files.sort_by_key(|(_, _, modified)| *modified);
+
+        for (path, size, _) in &files {
+            if total_size <= self.max_storage_bytes {
+                break;
+            }
+            if fs::remove_file(path).is_ok() {
+                total_size -= size;
             }
         }
     }

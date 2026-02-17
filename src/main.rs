@@ -217,6 +217,9 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                                             );
                                         }
                                     }
+                                    KeyCode::Char('w') => {
+                                        app.toggle_watch();
+                                    }
                                     KeyCode::Char('s') => {
                                         app.view_state.sort_column =
                                             next_sort_column(app.view_state.sort_column);

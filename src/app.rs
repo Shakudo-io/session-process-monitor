@@ -78,6 +78,7 @@ pub struct App {
     pub confirm_kill: Option<KillConfirmation>,
     pub mode: AppMode,
     pub recording_manager: recording::RecordingManager,
+    pub watched_pids: HashSet<u32>,
 }
 
 impl App {
@@ -109,7 +110,26 @@ impl App {
             confirm_kill: None,
             mode: AppMode::Live,
             recording_manager: recording::RecordingManager::new(),
+            watched_pids: HashSet::new(),
         }
+    }
+
+    pub fn toggle_watch(&mut self) {
+        if let Some(process) = self.selected_process() {
+            let pid = process.pid;
+            let name = process.name.clone();
+            if self.watched_pids.contains(&pid) {
+                self.watched_pids.remove(&pid);
+                self.set_status_message(format!("Unwatched: {} (PID {})", name, pid));
+            } else {
+                self.watched_pids.insert(pid);
+                self.set_status_message(format!("Watching: {} (PID {})", name, pid));
+            }
+        }
+    }
+
+    pub fn watched_count(&self) -> usize {
+        self.watched_pids.len()
     }
 
     pub fn tick(&mut self) {
@@ -181,6 +201,9 @@ impl App {
         let curr_pids: HashSet<u32> = processes.iter().map(|process| process.pid).collect();
         if self.mode == AppMode::Live {
             for pid in prev_pids.difference(&curr_pids) {
+                if !self.watched_pids.contains(pid) {
+                    continue;
+                }
                 let name = self
                     .processes
                     .iter()
@@ -193,6 +216,7 @@ impl App {
                         name, count
                     ));
                 }
+                self.watched_pids.remove(pid);
             }
         }
 

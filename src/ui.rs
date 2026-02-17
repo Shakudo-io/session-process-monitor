@@ -41,6 +41,7 @@ fn draw_live(frame: &mut Frame, app: &App) {
         app.view_state.sort_column,
         app.view_state.sort_ascending,
         Some(app.view_state.selected),
+        &app.watched_pids,
     );
 
     let (status_text, status_style) = status_line(app);
@@ -106,6 +107,7 @@ fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
             app.view_state.sort_column,
             app.view_state.sort_ascending,
             Some(app.view_state.selected),
+            &app.watched_pids,
         );
     } else {
         let placeholder = Paragraph::new("Recording has no snapshots.")
@@ -213,6 +215,7 @@ fn render_process_table(
     sort_column: SortColumn,
     sort_ascending: bool,
     selected: Option<usize>,
+    watched_pids: &std::collections::HashSet<u32>,
 ) {
     let header = Row::new(vec![
         header_label("PID", SortColumn::Pid, sort_column, sort_ascending),
@@ -264,8 +267,14 @@ fn render_process_table(
             process.cmdline.clone()
         };
 
+        let pid_label = if watched_pids.contains(&process.pid) {
+            format!("● {}", process.pid)
+        } else {
+            process.pid.to_string()
+        };
+
         Row::new(vec![
-            process.pid.to_string(),
+            pid_label,
             process.name.clone(),
             cmdline_display,
             format!("{:.1}", process.cpu_percent),
@@ -461,27 +470,36 @@ fn status_line(app: &App) -> (String, Style) {
         return (message.text.clone(), Style::default().fg(Color::Cyan));
     }
 
-    let recording_label = format!(
-        "REC ● {}/{} | ",
-        app.recording_manager.snapshot_count(),
-        app.recording_manager.max_snapshots()
-    );
+    let watched = app.watched_count();
+    let recording_label = if watched > 0 {
+        format!(
+            "REC ● {}/{} W:{} | ",
+            app.recording_manager.snapshot_count(),
+            app.recording_manager.max_snapshots(),
+            watched
+        )
+    } else {
+        format!(
+            "REC ● {}/{} | ",
+            app.recording_manager.snapshot_count(),
+            app.recording_manager.max_snapshots()
+        )
+    };
+
+    let keys = "q: quit | k: kill | w: watch | R: recordings | s: sort | /: filter | ↑/↓: select";
 
     if !app.view_state.filter.trim().is_empty() {
         return (
             format!(
-                "{}Filter: {} | q: quit | k: kill | R: recordings | s: sort | S/r: dir | /: filter | ↑/↓: select",
-                recording_label, app.view_state.filter
+                "{}Filter: {} | {}",
+                recording_label, app.view_state.filter, keys
             ),
             Style::default().fg(Color::Gray),
         );
     }
 
     (
-        format!(
-            "{}q: quit | k: kill | R: recordings | s: sort | S/r: dir | /: filter | ↑/↓: select",
-            recording_label
-        ),
+        format!("{}{}", recording_label, keys),
         Style::default().fg(Color::Gray),
     )
 }
