@@ -80,6 +80,7 @@ pub struct App {
     pub recording_manager: recording::RecordingManager,
     pub watched_pids: HashSet<u32>,
     pub show_cmdline: Option<(u32, String, String)>,
+    pub all_pids: HashSet<u32>,
 }
 
 impl App {
@@ -113,6 +114,7 @@ impl App {
             recording_manager: recording::RecordingManager::new(),
             watched_pids: HashSet::new(),
             show_cmdline: None,
+            all_pids: HashSet::new(),
         }
     }
 
@@ -199,29 +201,34 @@ impl App {
             self.view_state.selected = processes.len().saturating_sub(1);
         }
 
-        let prev_pids: HashSet<u32> = self.processes.iter().map(|process| process.pid).collect();
         let curr_pids: HashSet<u32> = processes.iter().map(|process| process.pid).collect();
         if self.mode == AppMode::Live {
-            for pid in prev_pids.difference(&curr_pids) {
-                if !self.watched_pids.contains(pid) {
-                    continue;
-                }
-                let name = self
-                    .processes
-                    .iter()
-                    .find(|process| process.pid == *pid)
-                    .map(|process| process.name.clone())
-                    .unwrap_or_else(|| "unknown".to_string());
-                if let Some(count) = self.recording_manager.save_recording(*pid, name.clone()) {
+            let exited_watched: Vec<(u32, String)> = self
+                .all_pids
+                .difference(&curr_pids)
+                .filter(|pid| self.watched_pids.contains(pid))
+                .map(|pid| {
+                    let name = self
+                        .processes
+                        .iter()
+                        .find(|p| p.pid == *pid)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| "unknown".to_string());
+                    (*pid, name)
+                })
+                .collect();
+            for (pid, name) in exited_watched {
+                if let Some(count) = self.recording_manager.save_recording(pid, name.clone()) {
                     self.set_status_message(format!(
                         "Recording saved: {} ({} snapshots)",
                         name, count
                     ));
                 }
-                self.watched_pids.remove(pid);
+                self.watched_pids.remove(&pid);
             }
         }
 
+        self.all_pids = curr_pids;
         self.processes = processes;
         self.pod_memory = pod_memory;
 

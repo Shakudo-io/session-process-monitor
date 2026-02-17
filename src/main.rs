@@ -180,8 +180,16 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<
                                 }
                             } else {
                                 match key_event.code {
-                                    KeyCode::Char('q') | KeyCode::Esc => {
+                                    KeyCode::Char('q') => {
                                         app.running = false;
+                                    }
+                                    KeyCode::Esc => {
+                                        if !app.view_state.filter.is_empty() {
+                                            app.view_state.filter.clear();
+                                            app.view_state.selected = 0;
+                                        } else {
+                                            app.running = false;
+                                        }
                                     }
                                     KeyCode::Char('/') => {
                                         app.view_state.filter_active = true;
