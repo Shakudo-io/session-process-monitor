@@ -314,7 +314,7 @@ fn render_process_table(
             None => "—".to_string(),
         };
 
-        const CMDLINE_MAX_LEN: usize = 40;
+        const CMDLINE_MAX_LEN: usize = 80;
         let cmdline_display = if process.cmdline.len() > CMDLINE_MAX_LEN {
             format!("{}...", &process.cmdline[..CMDLINE_MAX_LEN - 3])
         } else {
@@ -345,9 +345,9 @@ fn render_process_table(
     let table = Table::new(
         rows,
         [
-            Constraint::Length(8),
-            Constraint::Min(12),
-            Constraint::Min(30),
+            Constraint::Length(10),
+            Constraint::Length(18),
+            Constraint::Min(40),
             Constraint::Length(7),
             Constraint::Length(10),
             Constraint::Length(10),
