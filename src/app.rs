@@ -2,9 +2,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::env;
 use std::time::{Duration, Instant};
 
-use crate::{cgroup, proc};
+use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug)]
+use crate::replay::AppMode;
+use crate::{cgroup, proc, recording};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProcessSnapshot {
     pub pid: u32,
     pub name: String,
@@ -19,7 +22,7 @@ pub struct ProcessSnapshot {
     pub disk_write_rate: Option<f64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PodMemorySnapshot {
     pub cgroup_usage: u64,
     pub cgroup_limit: Option<u64>,
@@ -73,6 +76,8 @@ pub struct App {
     pub running: bool,
     pub status_message: Option<StatusMessage>,
     pub confirm_kill: Option<KillConfirmation>,
+    pub mode: AppMode,
+    pub recording_manager: recording::RecordingManager,
 }
 
 impl App {
@@ -102,6 +107,8 @@ impl App {
             running: true,
             status_message: None,
             confirm_kill: None,
+            mode: AppMode::Live,
+            recording_manager: recording::RecordingManager::new(),
         }
     }
 
@@ -121,10 +128,7 @@ impl App {
         let mut seen_pids: HashSet<u32> = HashSet::new();
         for process in processes.iter_mut() {
             seen_pids.insert(process.pid);
-            let window = self
-                .growth_windows
-                .entry(process.pid)
-                .or_insert_with(VecDeque::new);
+            let window = self.growth_windows.entry(process.pid).or_default();
             window.push_back((now, process.uss));
             while window.len() > 10 {
                 window.pop_front();
@@ -173,8 +177,40 @@ impl App {
             self.view_state.selected = processes.len().saturating_sub(1);
         }
 
+        let prev_pids: HashSet<u32> = self.processes.iter().map(|process| process.pid).collect();
+        let curr_pids: HashSet<u32> = processes.iter().map(|process| process.pid).collect();
+        if self.mode == AppMode::Live {
+            for pid in prev_pids.difference(&curr_pids) {
+                let name = self
+                    .processes
+                    .iter()
+                    .find(|process| process.pid == *pid)
+                    .map(|process| process.name.clone())
+                    .unwrap_or_else(|| "unknown".to_string());
+                if let Some(count) = self.recording_manager.save_recording(*pid, name.clone()) {
+                    self.set_status_message(format!(
+                        "Recording saved: {} ({} snapshots)",
+                        name, count
+                    ));
+                }
+            }
+        }
+
         self.processes = processes;
         self.pod_memory = pod_memory;
+
+        if self.mode == AppMode::Live {
+            let rec_snapshot = recording::RecordingSnapshot {
+                timestamp: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs(),
+                processes: self.processes.clone(),
+                pod_memory: self.pod_memory.clone(),
+                cpu_cores: self.cpu_cores,
+            };
+            self.recording_manager.add_snapshot(rec_snapshot);
+        }
     }
 
     pub fn set_status_message(&mut self, text: String) {

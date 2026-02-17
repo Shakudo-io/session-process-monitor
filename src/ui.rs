@@ -1,26 +1,190 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table, TableState};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, SortColumn};
+use crate::app::{App, PodMemorySnapshot, ProcessSnapshot, SortColumn};
+use crate::replay::{AppMode, RecordingListState, ReplayState};
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    match &app.mode {
+        AppMode::Replay(state) => draw_replay(frame, app, state),
+        _ => draw_live(frame, app),
+    }
+
+    if let AppMode::RecordingList(list_state) = &app.mode {
+        draw_recording_list_modal(frame, list_state);
+    }
+}
+
+fn draw_live(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3),
             Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Length(3),
         ])
         .split(frame.area());
 
+    render_gauges(
+        frame,
+        chunks[0],
+        &app.pod_memory,
+        &app.processes,
+        app.cpu_cores,
+    );
+    render_process_table(
+        frame,
+        chunks[1],
+        &app.processes,
+        app.view_state.sort_column,
+        app.view_state.sort_ascending,
+        Some(app.view_state.selected),
+    );
+
+    let (status_text, status_style) = status_line(app);
+    let status = Paragraph::new(status_text)
+        .style(status_style)
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(status, chunks[2]);
+}
+
+fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(3),
+        ])
+        .split(frame.area());
+
+    let total_snapshots = state.recording.snapshots.len();
+    let snapshot_index = if total_snapshots == 0 {
+        0
+    } else {
+        state.current_index.min(total_snapshots - 1) + 1
+    };
+    let (timestamp_label, snapshot) = match state.recording.snapshots.get(state.current_index) {
+        Some(snapshot) => (format_timestamp(snapshot.timestamp), Some(snapshot)),
+        None => ("—".to_string(), None),
+    };
+    let play_label = if state.playing {
+        "▶ PLAYING"
+    } else {
+        "⏸ PAUSED"
+    };
+    let header_text = format!(
+        "▶ REPLAY | {} | Snapshot {}/{} | {} | Speed: {} | [Space] Play/Pause [←→] Step [Esc] Exit",
+        play_label,
+        snapshot_index,
+        total_snapshots,
+        timestamp_label,
+        state.speed.label()
+    );
+    let header = Paragraph::new(header_text).style(
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(header, chunks[0]);
+
+    if let Some(snapshot) = snapshot {
+        render_gauges(
+            frame,
+            chunks[1],
+            &snapshot.pod_memory,
+            &snapshot.processes,
+            snapshot.cpu_cores,
+        );
+        render_process_table(
+            frame,
+            chunks[2],
+            &snapshot.processes,
+            app.view_state.sort_column,
+            app.view_state.sort_ascending,
+            Some(app.view_state.selected),
+        );
+    } else {
+        let placeholder = Paragraph::new("Recording has no snapshots.")
+            .style(Style::default().fg(Color::Yellow))
+            .block(Block::default().borders(Borders::ALL).title("Replay"));
+        frame.render_widget(placeholder, chunks[2]);
+        frame.render_widget(Block::default().borders(Borders::ALL), chunks[1]);
+    }
+
+    let (status_text, status_style) = status_line(app);
+    let status = Paragraph::new(status_text)
+        .style(status_style)
+        .block(Block::default().borders(Borders::ALL));
+    frame.render_widget(status, chunks[3]);
+}
+
+fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState) {
+    let area = centered_rect(80, 60, frame.area());
+    frame.render_widget(Clear, area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title("Recordings (Enter: select, d: delete, Esc: close)");
+
+    if list_state.recordings.is_empty() {
+        let empty =
+            Paragraph::new("No recordings available. Recordings are saved when processes exit.")
+                .style(Style::default().fg(Color::Gray))
+                .block(block);
+        frame.render_widget(empty, area);
+        return;
+    }
+
+    let header = Row::new(vec!["Time", "Process", "Snapshots"])
+        .style(Style::default().add_modifier(Modifier::BOLD));
+    let rows = list_state.recordings.iter().map(|recording| {
+        Row::new(vec![
+            format_timestamp(recording.end_time),
+            recording.trigger_name.clone(),
+            recording.snapshot_count.to_string(),
+        ])
+    });
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(12),
+            Constraint::Min(20),
+            Constraint::Length(10),
+        ],
+    )
+    .header(header)
+    .block(block)
+    .column_spacing(1)
+    .row_highlight_style(Style::default().bg(Color::DarkGray));
+
+    let mut table_state = TableState::default();
+    if !list_state.recordings.is_empty() {
+        let selected = list_state
+            .selected
+            .min(list_state.recordings.len().saturating_sub(1));
+        table_state.select(Some(selected));
+    }
+    frame.render_stateful_widget(table, area, &mut table_state);
+}
+
+fn render_gauges(
+    frame: &mut Frame,
+    area: Rect,
+    pod_memory: &PodMemorySnapshot,
+    processes: &[ProcessSnapshot],
+    cpu_cores: Option<f64>,
+) {
     let gauge_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(chunks[0]);
+        .split(area);
 
-    let mem_state = memory_gauge_state(app);
+    let mem_state = memory_gauge_state(pod_memory);
     let mem_block = Block::default().borders(Borders::ALL).title("Pod Memory");
     let mem_gauge = Gauge::default()
         .block(mem_block.clone())
@@ -32,7 +196,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         render_danger_marker(frame, gauge_chunks[0], &mem_block, danger_percent);
     }
 
-    let cpu_state = cpu_gauge_state(app);
+    let cpu_state = cpu_gauge_state(processes, cpu_cores);
     let cpu_block = Block::default().borders(Borders::ALL).title("CPU Usage");
     let cpu_gauge = Gauge::default()
         .block(cpu_block)
@@ -40,22 +204,36 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .label(cpu_state.label)
         .gauge_style(cpu_state.gauge_style);
     frame.render_widget(cpu_gauge, gauge_chunks[1]);
+}
 
+fn render_process_table(
+    frame: &mut Frame,
+    area: Rect,
+    processes: &[ProcessSnapshot],
+    sort_column: SortColumn,
+    sort_ascending: bool,
+    selected: Option<usize>,
+) {
     let header = Row::new(vec![
-        header_label("PID", SortColumn::Pid, app),
-        header_label("Name", SortColumn::Name, app),
-        header_label("Cmdline", SortColumn::Cmdline, app),
-        header_label("CPU%", SortColumn::Cpu, app),
-        header_label("USS", SortColumn::Uss, app),
-        header_label("PSS", SortColumn::Pss, app),
-        header_label("RSS", SortColumn::Rss, app),
-        header_label("Growth", SortColumn::GrowthRate, app),
-        header_label("Read", SortColumn::DiskRead, app),
-        header_label("Write", SortColumn::DiskWrite, app),
+        header_label("PID", SortColumn::Pid, sort_column, sort_ascending),
+        header_label("Name", SortColumn::Name, sort_column, sort_ascending),
+        header_label("Cmdline", SortColumn::Cmdline, sort_column, sort_ascending),
+        header_label("CPU%", SortColumn::Cpu, sort_column, sort_ascending),
+        header_label("USS", SortColumn::Uss, sort_column, sort_ascending),
+        header_label("PSS", SortColumn::Pss, sort_column, sort_ascending),
+        header_label("RSS", SortColumn::Rss, sort_column, sort_ascending),
+        header_label(
+            "Growth",
+            SortColumn::GrowthRate,
+            sort_column,
+            sort_ascending,
+        ),
+        header_label("Read", SortColumn::DiskRead, sort_column, sort_ascending),
+        header_label("Write", SortColumn::DiskWrite, sort_column, sort_ascending),
     ])
     .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let rows = app.processes.iter().map(|process| {
+    let rows = processes.iter().map(|process| {
         let style = if process.is_system {
             Style::default()
                 .fg(Color::DarkGray)
@@ -122,16 +300,13 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .row_highlight_style(Style::default().bg(Color::DarkGray));
 
     let mut table_state = TableState::default();
-    if !app.processes.is_empty() {
-        table_state.select(Some(app.view_state.selected));
+    if !processes.is_empty() {
+        if let Some(selected) = selected {
+            let selected = selected.min(processes.len().saturating_sub(1));
+            table_state.select(Some(selected));
+        }
     }
-    frame.render_stateful_widget(table, chunks[1], &mut table_state);
-
-    let (status_text, status_style) = status_line(app);
-    let status = Paragraph::new(status_text)
-        .style(status_style)
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(status, chunks[2]);
+    frame.render_stateful_widget(table, area, &mut table_state);
 }
 
 struct MemoryGaugeState {
@@ -141,11 +316,11 @@ struct MemoryGaugeState {
     danger_percent: Option<u8>,
 }
 
-fn memory_gauge_state(app: &App) -> MemoryGaugeState {
-    let usage = app.pod_memory.cgroup_usage;
-    let limit = app.pod_memory.cgroup_limit;
-    let rss_sum = app.pod_memory.rss_sum;
-    let threshold = app.pod_memory.terminator_threshold_percent.min(100);
+fn memory_gauge_state(pod_memory: &PodMemorySnapshot) -> MemoryGaugeState {
+    let usage = pod_memory.cgroup_usage;
+    let limit = pod_memory.cgroup_limit;
+    let rss_sum = pod_memory.rss_sum;
+    let threshold = pod_memory.terminator_threshold_percent.min(100);
 
     let ratio = match limit {
         Some(limit) if limit > 0 => (usage as f64 / limit as f64).min(1.0),
@@ -196,11 +371,11 @@ struct CpuGaugeState {
     gauge_style: Style,
 }
 
-fn cpu_gauge_state(app: &App) -> CpuGaugeState {
-    let total_cpu: f64 = app.processes.iter().map(|p| p.cpu_percent).sum();
-    let process_count = app.processes.len();
+fn cpu_gauge_state(processes: &[ProcessSnapshot], cpu_cores: Option<f64>) -> CpuGaugeState {
+    let total_cpu: f64 = processes.iter().map(|p| p.cpu_percent).sum();
+    let process_count = processes.len();
 
-    let (ratio, label, color) = match app.cpu_cores {
+    let (ratio, label, color) = match cpu_cores {
         Some(cores) if cores > 0.0 => {
             let cpu_percent = total_cpu / cores;
             let ratio = (cpu_percent / 100.0).min(1.0);
@@ -286,33 +461,69 @@ fn status_line(app: &App) -> (String, Style) {
         return (message.text.clone(), Style::default().fg(Color::Cyan));
     }
 
+    let recording_label = format!(
+        "REC ● {}/{} | ",
+        app.recording_manager.snapshot_count(),
+        app.recording_manager.max_snapshots()
+    );
+
     if !app.view_state.filter.trim().is_empty() {
         return (
             format!(
-                "Filter: {} | q: quit | k: kill | s: sort | S/r: dir | /: filter | ↑/↓: select",
-                app.view_state.filter
+                "{}Filter: {} | q: quit | k: kill | R: recordings | s: sort | S/r: dir | /: filter | ↑/↓: select",
+                recording_label, app.view_state.filter
             ),
             Style::default().fg(Color::Gray),
         );
     }
 
     (
-        "q: quit | k: kill | s: sort | S/r: dir | /: filter | ↑/↓: select".to_string(),
+        format!(
+            "{}q: quit | k: kill | R: recordings | s: sort | S/r: dir | /: filter | ↑/↓: select",
+            recording_label
+        ),
         Style::default().fg(Color::Gray),
     )
 }
 
-fn header_label(label: &str, column: SortColumn, app: &App) -> String {
-    if app.view_state.sort_column == column {
-        let arrow = if app.view_state.sort_ascending {
-            "▲"
-        } else {
-            "▼"
-        };
+fn header_label(
+    label: &str,
+    column: SortColumn,
+    sort_column: SortColumn,
+    sort_ascending: bool,
+) -> String {
+    if sort_column == column {
+        let arrow = if sort_ascending { "▲" } else { "▼" };
         format!("{} {}", label, arrow)
     } else {
         label.to_string()
     }
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
+fn format_timestamp(ts: u64) -> String {
+    let secs = ts % 60;
+    let mins = (ts / 60) % 60;
+    let hours = (ts / 3600) % 24;
+    format!("{:02}:{:02}:{:02}", hours, mins, secs)
 }
 
 fn format_bytes(value: u64) -> String {

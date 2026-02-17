@@ -14,6 +14,7 @@ A terminal UI for monitoring per-process memory, CPU, and disk I/O usage inside 
 - **Process Management**: Kill processes directly from the UI with confirmation
 - **System Process Protection**: Warns before killing critical session processes
 - **Sorting & Filtering**: Sort by any column, filter by process name/cmdline
+- **Session Recording & Replay**: Save snapshots on exit and replay resource usage
 
 ## Installation
 
@@ -55,12 +56,37 @@ The binary will be at `target/release/session-process-monitor`.
 |-----|--------|
 | `q` | Quit |
 | `k` | Kill selected process |
+| `R` | Open recordings list |
 | `s` | Cycle sort column |
 | `S` / `r` | Toggle sort direction |
 | `/` | Enter filter mode |
 | `Esc` | Clear filter / Cancel |
 | `↑` / `↓` | Move selection |
 | `y` / `n` | Confirm/Cancel kill |
+
+### Recording & Replay
+
+Recordings are saved when a process exits. Press `R` to open the recordings list.
+
+#### Recording List
+
+| Key | Action |
+|-----|--------|
+| `↑` / `↓` | Move selection |
+| `Enter` | Load selected recording |
+| `d` | Delete selected recording |
+| `Esc` | Close recordings list |
+
+#### Replay Controls
+
+| Key | Action |
+|-----|--------|
+| `←` / `→` | Step backward/forward |
+| `PageUp` / `PageDown` | Jump 10 snapshots |
+| `Home` / `End` | Jump to start/end |
+| `Space` | Play/Pause |
+| `+` / `-` | Increase/Decrease speed |
+| `Esc` / `q` | Exit replay |
 
 ## Metrics Explained
 
@@ -84,6 +110,9 @@ The binary will be at `target/release/session-process-monitor`.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HYPERPLANE_SESSION_PROCESS_TERMINATOR_THRESHOLD_PERCENT` | `80` | Memory percentage shown as danger marker on gauge |
+| `SPM_RECORDING_WINDOW` | `300` | Number of snapshots kept in the rolling recording buffer |
+| `SPM_RECORDING_MAX_AGE_DAYS` | `7` | Auto-delete recordings older than this many days |
+| `SPM_RECORDINGS_DIR` | `~/.session-process-monitor/recordings` | Directory where recordings are stored |
 
 ## How It Works
 
