@@ -36,6 +36,7 @@ pub struct BackoffState {
     pub current_delay: Duration,
     pub max_delay: Duration,
     pub restart_at: Option<Instant>,
+    pub last_delay: Duration,
     pub stable_since: Option<Instant>,
     pub stability_threshold: Duration,
 }
@@ -61,6 +62,7 @@ impl BackoffState {
             current_delay: Duration::from_secs(1),
             max_delay: Duration::from_secs(30),
             restart_at: None,
+            last_delay: Duration::from_secs(1),
             stable_since: None,
             stability_threshold: Duration::from_secs(60),
         }
@@ -68,13 +70,16 @@ impl BackoffState {
 
     pub fn next_delay(&mut self) -> Duration {
         let delay = self.current_delay;
+        self.last_delay = delay;
         self.current_delay = (self.current_delay * 2).min(self.max_delay);
         delay
     }
 
     pub fn schedule_restart(&mut self) -> Duration {
-        let delay = self.next_delay();
+        let delay = self.current_delay;
         self.restart_at = Some(Instant::now() + delay);
+        self.last_delay = delay;
+        self.current_delay = (self.current_delay * 2).min(self.max_delay);
         delay
     }
 
@@ -82,6 +87,7 @@ impl BackoffState {
         if let Some(stable_since) = self.stable_since {
             if stable_since.elapsed() >= self.stability_threshold {
                 self.current_delay = Duration::from_secs(1);
+                self.last_delay = self.current_delay;
             }
         }
     }

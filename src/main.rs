@@ -261,6 +261,8 @@ fn run_supervisor(
         .map(|(index, cmd)| supervisor::ManagedChild::new(index, cmd.clone()))
         .collect();
 
+    let (tx, rx) = std::sync::mpsc::channel();
+
     for child in children.iter_mut() {
         match supervisor::spawn_child(child, effective_headless) {
             Ok(spawned) => {
@@ -285,8 +287,18 @@ fn run_supervisor(
         }
     }
 
+    for child in children.iter() {
+        if let Some(pid) = child.pid {
+            let _ = tx.send(monitor::MonitorEvent::Spawn {
+                index: child.index,
+                cmd: child.command.clone(),
+                pid,
+                log_path: child.log_path.clone(),
+            });
+        }
+    }
+
     let managed = Arc::new(Mutex::new(children));
-    let (tx, rx) = std::sync::mpsc::channel();
 
     let _monitor = monitor::spawn_monitor_thread(
         Arc::clone(&managed),
@@ -555,39 +567,46 @@ fn run_supervisor_headless(
     let mut log_file = log_path.and_then(|p| std::fs::File::create(p).ok());
 
     loop {
+        let mut events = Vec::new();
         match rx.recv() {
-            Ok(event) => {
-                if let Some(json) = monitor::event_to_json(&event) {
-                    eprintln!("{}", json);
-                    if let Some(ref mut file) = log_file {
-                        use std::io::Write;
-                        let _ = writeln!(file, "{}", json);
-                    }
-                }
+            Ok(event) => events.push(event),
+            Err(_) => break,
+        }
 
-                if let Ok(children) = managed.lock() {
-                    if !children.is_empty()
-                        && children.iter().all(|child| {
-                            matches!(
-                                child.state,
-                                supervisor::ChildState::Completed | supervisor::ChildState::Failed
-                            )
-                        })
-                    {
-                        let shutdown = format!(
-                            "{{\"ts\":\"{}\",\"event\":\"shutdown\",\"reason\":\"all_terminal\"}}",
-                            monitor::chrono_like_timestamp()
-                        );
-                        eprintln!("{}", shutdown);
-                        if let Some(ref mut file) = log_file {
-                            use std::io::Write;
-                            let _ = writeln!(file, "{}", shutdown);
-                        }
-                        break;
-                    }
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+
+        for event in &events {
+            if let Some(json) = monitor::event_to_json(event) {
+                eprintln!("{}", json);
+                if let Some(ref mut file) = log_file {
+                    use std::io::Write;
+                    let _ = writeln!(file, "{}", json);
                 }
             }
-            Err(_) => break,
+        }
+
+        if let Ok(children) = managed.lock() {
+            if !children.is_empty()
+                && children.iter().all(|child| {
+                    matches!(
+                        child.state,
+                        supervisor::ChildState::Completed | supervisor::ChildState::Failed
+                    )
+                })
+            {
+                let shutdown = format!(
+                    "{{\"ts\":\"{}\",\"event\":\"shutdown\",\"reason\":\"all_terminal\"}}",
+                    monitor::chrono_like_timestamp()
+                );
+                eprintln!("{}", shutdown);
+                if let Some(ref mut file) = log_file {
+                    use std::io::Write;
+                    let _ = writeln!(file, "{}", shutdown);
+                }
+                break;
+            }
         }
     }
 }

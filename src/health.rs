@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -28,8 +29,60 @@ static TCP_READ_WARNED: AtomicBool = AtomicBool::new(false);
 
 /// Detect TCP LISTEN ports for a process by scanning /proc/{pid}/net/tcp
 pub fn detect_listening_ports(pid: u32) -> Vec<u16> {
+    let mut owned_inodes = get_owned_socket_inodes(pid);
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            if let Some(child_pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|value| value.parse::<u32>().ok())
+            {
+                if child_pid == pid {
+                    continue;
+                }
+                if is_descendant(child_pid, pid) {
+                    owned_inodes.extend(get_owned_socket_inodes(child_pid));
+                }
+            }
+        }
+    }
+    let listen_entries = get_listen_entries(pid);
     let mut ports = Vec::new();
 
+    for (port, inode) in listen_entries {
+        if owned_inodes.contains(&inode) && !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+
+    ports
+}
+
+fn get_owned_socket_inodes(pid: u32) -> HashSet<u64> {
+    let mut inodes = HashSet::new();
+    let fd_dir = format!("/proc/{pid}/fd");
+    if let Ok(entries) = std::fs::read_dir(&fd_dir) {
+        for entry in entries.flatten() {
+            if let Ok(link) = std::fs::read_link(entry.path()) {
+                let link_str = link.to_string_lossy();
+                if link_str.starts_with("socket:[") {
+                    if let Some(inode_str) = link_str
+                        .strip_prefix("socket:[")
+                        .and_then(|value| value.strip_suffix(']'))
+                    {
+                        if let Ok(inode) = inode_str.parse::<u64>() {
+                            inodes.insert(inode);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    inodes
+}
+
+fn get_listen_entries(pid: u32) -> Vec<(u16, u64)> {
+    let mut entries = Vec::new();
     for tcp_file in &[
         format!("/proc/{pid}/net/tcp"),
         format!("/proc/{pid}/net/tcp6"),
@@ -38,20 +91,21 @@ pub fn detect_listening_ports(pid: u32) -> Vec<u16> {
             Ok(content) => {
                 for line in content.lines().skip(1) {
                     let fields: Vec<&str> = line.split_whitespace().collect();
-                    if fields.len() < 4 {
+                    if fields.len() < 10 {
                         continue;
                     }
-
                     if fields[3] != "0A" {
                         continue;
                     }
 
-                    if let Some(port_hex) = fields[1].split(':').nth(1) {
-                        if let Ok(port) = u16::from_str_radix(port_hex, 16) {
-                            if port > 0 && !ports.contains(&port) {
-                                ports.push(port);
-                            }
-                        }
+                    let port = fields[1]
+                        .split(':')
+                        .nth(1)
+                        .and_then(|value| u16::from_str_radix(value, 16).ok())
+                        .unwrap_or(0);
+                    let inode = fields[9].parse::<u64>().unwrap_or(0);
+                    if port > 0 && inode > 0 {
+                        entries.push((port, inode));
                     }
                 }
             }
@@ -62,8 +116,35 @@ pub fn detect_listening_ports(pid: u32) -> Vec<u16> {
             }
         }
     }
+    entries
+}
 
-    ports
+fn is_descendant(mut child_pid: u32, ancestor_pid: u32) -> bool {
+    loop {
+        if child_pid == ancestor_pid {
+            return false;
+        }
+        let ppid = match read_ppid(child_pid) {
+            Some(ppid) => ppid,
+            None => return false,
+        };
+        if ppid == ancestor_pid {
+            return true;
+        }
+        if ppid == 0 || ppid == child_pid {
+            return false;
+        }
+        child_pid = ppid;
+    }
+}
+
+fn read_ppid(pid: u32) -> Option<u32> {
+    let stat_path = format!("/proc/{pid}/stat");
+    let content = std::fs::read_to_string(&stat_path).ok()?;
+    let end = content.rfind(')')?;
+    let rest = content[end + 1..].trim();
+    let fields: Vec<&str> = rest.split_whitespace().collect();
+    fields.get(1)?.parse::<u32>().ok()
 }
 
 /// Probe a health endpoint. Returns true if HTTP 2xx received.

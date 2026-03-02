@@ -15,10 +15,13 @@ impl ProtectionPolicy {
     }
 
     pub fn select_victim(&self, managed: &[crate::supervisor::ManagedChild]) -> Option<usize> {
+        const MIN_KILL_USS: u64 = 10_000_000;
+
         managed
             .iter()
             .enumerate()
             .filter(|(_, child)| child.state == crate::supervisor::ChildState::Running)
+            .filter(|(_, child)| child.total_uss >= MIN_KILL_USS)
             .filter(|(_, child)| {
                 if let Some(pid) = child.pid {
                     !self.is_protected(pid)

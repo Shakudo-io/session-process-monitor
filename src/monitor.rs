@@ -27,6 +27,7 @@ pub enum MonitorEvent {
     },
     Exit {
         index: usize,
+        cmd: String,
         pid: u32,
         exit_code: Option<i32>,
         signal: Option<i32>,
@@ -102,6 +103,7 @@ pub fn event_to_json(event: &MonitorEvent) -> Option<String> {
         }
         MonitorEvent::Exit {
             index,
+            cmd,
             pid,
             exit_code,
             signal,
@@ -113,7 +115,8 @@ pub fn event_to_json(event: &MonitorEvent) -> Option<String> {
                 .map(|s| format!(",\"signal\":{s}"))
                 .unwrap_or_default();
             Some(format!(
-                "{{\"ts\":\"{ts}\",\"event\":\"exit\",\"index\":{index},\"pid\":{pid}{ec}{sig}}}"
+                "{{\"ts\":\"{ts}\",\"event\":\"exit\",\"index\":{index},\"cmd\":\"{}\",\"pid\":{pid}{ec}{sig}}}",
+                escape_json(cmd)
             ))
         }
         MonitorEvent::GuardWarning {
@@ -522,12 +525,18 @@ pub fn spawn_monitor_thread(
                                             supervisor::spawn_output_reader(name, stderr, true);
                                         }
                                     }
+                                    let _ = tx.send(MonitorEvent::Spawn {
+                                        index: child.index,
+                                        cmd: child.command.clone(),
+                                        pid: spawned.pid,
+                                        log_path: child.log_path.clone(),
+                                    });
                                     let _ = tx.send(MonitorEvent::Restart {
                                         index: child.index,
                                         cmd: child.command.clone(),
                                         new_pid: spawned.pid,
                                         restart_count: child.restart_count,
-                                        backoff_secs: child.backoff.current_delay.as_secs_f64(),
+                                        backoff_secs: child.backoff.last_delay.as_secs_f64(),
                                     });
                                 }
                                 Err(error) => {
@@ -654,6 +663,7 @@ fn handle_child_exit(
 
     let _ = tx.send(MonitorEvent::Exit {
         index: child.index,
+        cmd: child.command.clone(),
         pid,
         exit_code,
         signal,
