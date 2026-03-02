@@ -35,6 +35,8 @@ pub enum MonitorEvent {
         pid: u32,
         exit_code: Option<i32>,
         signal: Option<i32>,
+        killed_by_guard: bool,
+        killed_by_health: bool,
     },
     GuardWarning {
         pod_percent: f64,
@@ -112,6 +114,8 @@ pub fn event_to_json(event: &MonitorEvent) -> Option<String> {
             pid,
             exit_code,
             signal,
+            killed_by_guard,
+            killed_by_health,
         } => {
             let ec = exit_code
                 .map(|c| format!(",\"exit_code\":{c}"))
@@ -119,8 +123,15 @@ pub fn event_to_json(event: &MonitorEvent) -> Option<String> {
             let sig = signal
                 .map(|s| format!(",\"signal\":{s}"))
                 .unwrap_or_default();
+            let kb = if *killed_by_guard {
+                ",\"killed_by\":\"guard\""
+            } else if *killed_by_health {
+                ",\"killed_by\":\"health\""
+            } else {
+                ""
+            };
             Some(format!(
-                "{{\"ts\":\"{ts}\",\"event\":\"exit\",\"index\":{index},\"cmd\":\"{}\",\"pid\":{pid}{ec}{sig}}}",
+                "{{\"ts\":\"{ts}\",\"event\":\"exit\",\"index\":{index},\"cmd\":\"{}\",\"pid\":{pid}{ec}{sig}{kb}}}",
                 escape_json(cmd)
             ))
         }
@@ -662,12 +673,20 @@ fn handle_child_exit(
         exited_at: Instant::now(),
     });
 
+    let was_guard = matches!(child.state, supervisor::ChildState::Stopping { .. });
+    let was_health = child
+        .last_exit
+        .as_ref()
+        .map(|e| e.killed_by_health)
+        .unwrap_or(false);
     let _ = tx.send(MonitorEvent::Exit {
         index: child.index,
         cmd: child.command.clone(),
         pid,
         exit_code,
         signal,
+        killed_by_guard: was_guard,
+        killed_by_health: was_health,
     });
 
     if exit_code == Some(0) && !matches!(child.state, supervisor::ChildState::Stopping { .. }) {

@@ -93,7 +93,7 @@ impl BackoffState {
     }
 
     pub fn should_restart(&self, max_restarts: u32, current_count: u32) -> bool {
-        current_count < max_restarts
+        current_count <= max_restarts
     }
 }
 
