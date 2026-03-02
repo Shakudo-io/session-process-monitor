@@ -49,6 +49,57 @@ The binary will be at `target/release/session-process-monitor`.
 ./session-process-monitor
 ```
 
+## Supervisor Mode
+
+Run and supervise one or more commands:
+
+```bash
+spm run "cmd1" "cmd2"
+```
+
+### Supervisor Flags
+
+- `--headless` — run without TUI, emit JSON events to stderr
+- `--kill-threshold <percent>` — pod memory % before guard triggers (default: 75)
+- `--grace-ticks <seconds>` — consecutive seconds above threshold before kill (default: 3)
+- `--max-restarts <count>` — max restarts before marking Failed (default: 10)
+- `--log <path>` — write JSON events to a file
+
+### Environment Variable Fallbacks
+
+- `SPM_GUARD_KILL_THRESHOLD`
+- `SPM_GUARD_GRACE_TICKS`
+- `SPM_GUARD_MAX_RESTARTS`
+- `SPM_GUARD_LOG`
+
+### Health Check Behavior
+
+When a managed process starts listening on a local TCP port, `spm` probes health
+endpoints in order: `/healthz`, `/health`, `/ready`, `/`. A 2xx response marks
+the process as Healthy. Consecutive failures mark it Unhealthy and the guard
+terminates the process group. If no port is discovered within ~30 seconds, the
+process is marked NotApplicable.
+
+### Guard Thresholds
+
+- Default kill threshold: **75%** pod memory usage
+- Emergency threshold: **78%** (uses SIGKILL instead of SIGTERM)
+
+### Shared State File
+
+Supervisor mode writes shared state to `/tmp/spm-state.json` once per second
+using atomic writes. A read-only `spm` (no args) will display the managed
+process pane whenever this state file is fresh (≤ 5 seconds old).
+
+### Exit Behavior
+
+- A command that exits with code 0 is marked **Completed**.
+- Non-zero exits are restarted with backoff until `--max-restarts`, then marked
+  **Failed**.
+- The supervisor exits when all commands are Completed or Failed.
+- On SIGINT/SIGTERM, `spm` forwards SIGTERM to managed process groups, waits
+  briefly, then SIGKILLs remaining processes.
+
 ### Keybindings
 
 | Key | Action |

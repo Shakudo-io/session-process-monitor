@@ -1,24 +1,42 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Gauge, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, SortColumn};
+use crate::app::{App, GuardAlert, KillTarget, SortColumn};
+use crate::health::HealthStatus;
+use crate::supervisor::ChildState;
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
-        .split(frame.area());
+    let (gauge_area, managed_area, table_area, status_area) = if app.supervisor_mode {
+        let managed_height = managed_pane_height(app);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(managed_height),
+                Constraint::Min(1),
+                Constraint::Length(2),
+            ])
+            .split(frame.area());
+        (chunks[0], Some(chunks[1]), chunks[2], chunks[3])
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(1),
+            ])
+            .split(frame.area());
+        (chunks[0], None, chunks[1], chunks[2])
+    };
 
     let gauge_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(chunks[0]);
+        .split(gauge_area);
 
     let mem_state = memory_gauge_state(app);
     let mem_block = Block::default().borders(Borders::ALL).title("Pod Memory");
@@ -40,6 +58,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .label(cpu_state.label)
         .gauge_style(cpu_state.gauge_style);
     frame.render_widget(cpu_gauge, gauge_chunks[1]);
+
+    if let Some(area) = managed_area {
+        render_managed_processes(frame, area, app);
+    }
 
     let header = Row::new(vec![
         header_label("PID", SortColumn::Pid, app),
@@ -125,13 +147,20 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if !app.processes.is_empty() {
         table_state.select(Some(app.view_state.selected));
     }
-    frame.render_stateful_widget(table, chunks[1], &mut table_state);
+    frame.render_stateful_widget(table, table_area, &mut table_state);
 
     let (status_text, status_style) = status_line(app);
-    let status = Paragraph::new(status_text)
-        .style(status_style)
-        .block(Block::default().borders(Borders::ALL));
-    frame.render_widget(status, chunks[2]);
+    if app.supervisor_mode {
+        let guard_line = guard_status_line(app);
+        let status = Paragraph::new(vec![Line::styled(status_text, status_style), guard_line])
+            .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(status, status_area);
+    } else {
+        let status = Paragraph::new(status_text)
+            .style(status_style)
+            .block(Block::default().borders(Borders::ALL));
+        frame.render_widget(status, status_area);
+    }
 }
 
 struct MemoryGaugeState {
@@ -260,19 +289,45 @@ fn render_danger_marker(frame: &mut Frame, area: Rect, block: &Block, percent: u
 
 fn status_line(app: &App) -> (String, Style) {
     if let Some(confirm) = &app.confirm_kill {
-        if confirm.is_system {
-            return (
-                format!(
-                    "⚠ SYSTEM PROCESS — Kill {} {}? This may break the session. (y/n)",
-                    confirm.pid, confirm.name
-                ),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            );
+        match &confirm.target {
+            KillTarget::Process {
+                pid,
+                name,
+                is_system,
+            } => {
+                if *is_system {
+                    return (
+                        format!(
+                            "⚠ SYSTEM PROCESS — Kill {} {}? This may break the session. (y/n)",
+                            pid, name
+                        ),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    );
+                }
+                return (
+                    format!("Kill process {} {}? (y/n)", pid, name),
+                    Style::default().fg(Color::Yellow),
+                );
+            }
+            KillTarget::Managed {
+                index,
+                command,
+                pid,
+                ..
+            } => {
+                let cmd = truncate_command(command, 40);
+                let pid_label = pid
+                    .map(|value| format!(" (PID {})", value))
+                    .unwrap_or_default();
+                return (
+                    format!(
+                        "Kill managed process #{} {}{}? (y/n)",
+                        index, cmd, pid_label
+                    ),
+                    Style::default().fg(Color::Yellow),
+                );
+            }
         }
-        return (
-            format!("Kill process {} {}? (y/n)", confirm.pid, confirm.name),
-            Style::default().fg(Color::Yellow),
-        );
     }
 
     if app.view_state.filter_active {
@@ -300,6 +355,160 @@ fn status_line(app: &App) -> (String, Style) {
         "q: quit | k: kill | s: sort | S/r: dir | /: filter | ↑/↓: select".to_string(),
         Style::default().fg(Color::Gray),
     )
+}
+
+fn guard_status_line(app: &App) -> Line<'_> {
+    let guard = match &app.guard {
+        Some(guard) => guard,
+        None => {
+            return Line::from(vec![
+                Span::raw("🛡 Guard: "),
+                Span::styled("OFF", Style::default().fg(Color::Gray)),
+            ])
+        }
+    };
+
+    if !guard.config.enabled {
+        return Line::from(vec![
+            Span::raw("🛡 Guard: "),
+            Span::styled("OFF", Style::default().fg(Color::Gray)),
+        ]);
+    }
+
+    match &app.guard_alert {
+        Some(GuardAlert::Exhausted { .. }) => Line::from(vec![
+            Span::raw("🛡 Guard: "),
+            Span::styled("EXHAUSTED", Style::default().fg(Color::Red)),
+            Span::raw(" — all managed killed"),
+        ]),
+        Some(GuardAlert::Triggered {
+            percent,
+            ticks_remaining,
+        }) => {
+            let grace_ticks = guard.config.grace_ticks.max(1);
+            let ticks_elapsed = grace_ticks.saturating_sub(*ticks_remaining);
+            Line::from(vec![
+                Span::raw("🛡 Guard: "),
+                Span::styled("TRIGGERED", Style::default().fg(Color::Yellow)),
+                Span::raw(format!(
+                    " ({:.0}%, {}/{} ticks)",
+                    percent.round(),
+                    ticks_elapsed,
+                    grace_ticks
+                )),
+            ])
+        }
+        None => {
+            let percent = pod_memory_percent(app).unwrap_or(0.0);
+            Line::from(vec![
+                Span::raw("🛡 Guard: "),
+                Span::styled("ARMED", Style::default().fg(Color::Green)),
+                Span::raw(format!(
+                    " ({:.0}%) | {} kills",
+                    percent.round(),
+                    guard.total_kills
+                )),
+            ])
+        }
+    }
+}
+
+fn pod_memory_percent(app: &App) -> Option<f64> {
+    let limit = app.pod_memory.cgroup_limit?;
+    if limit == 0 {
+        return None;
+    }
+    Some((app.pod_memory.cgroup_usage as f64 / limit as f64) * 100.0)
+}
+
+fn managed_pane_height(app: &App) -> u16 {
+    let count = app.managed_children.len().min(u16::MAX as usize) as u16;
+    let height = count.saturating_add(3);
+    height.clamp(3, 10)
+}
+
+fn render_managed_processes(frame: &mut Frame, area: Rect, app: &App) {
+    let header = Row::new(vec![
+        "#".to_string(),
+        "Command".to_string(),
+        "State".to_string(),
+        "USS".to_string(),
+        "Health".to_string(),
+        "Restarts".to_string(),
+    ])
+    .style(Style::default().add_modifier(Modifier::BOLD));
+
+    let rows = app.managed_children.iter().map(|child| {
+        let command = truncate_command(&child.command, 30);
+        let state = child_state_label(&child.state);
+        let health = health_label(&child.health.status, child.health.port);
+
+        Row::new(vec![
+            child.index.to_string(),
+            command,
+            state,
+            format_bytes(child.total_uss),
+            health,
+            child.restart_count.to_string(),
+        ])
+    });
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(3),
+            Constraint::Min(30),
+            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Length(8),
+        ],
+    )
+    .header(header)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Managed Processes"),
+    )
+    .column_spacing(1)
+    .row_highlight_style(Style::default().bg(Color::DarkGray));
+
+    let mut table_state = TableState::default();
+    frame.render_stateful_widget(table, area, &mut table_state);
+}
+
+fn child_state_label(state: &ChildState) -> String {
+    match state {
+        ChildState::Running => "Running".to_string(),
+        ChildState::Stopping { .. } => "Stopping".to_string(),
+        ChildState::Restarting => "Restarting".to_string(),
+        ChildState::Completed => "Completed".to_string(),
+        ChildState::Failed => "Failed".to_string(),
+        ChildState::Stopped => "Stopped".to_string(),
+    }
+}
+
+fn health_label(status: &HealthStatus, port: Option<u16>) -> String {
+    match status {
+        HealthStatus::Healthy => match port {
+            Some(port) => format!("✓ :{}", port),
+            None => "✓".to_string(),
+        },
+        HealthStatus::Unhealthy => match port {
+            Some(port) => format!("✗ :{}", port),
+            None => "✗".to_string(),
+        },
+        HealthStatus::Discovering | HealthStatus::Probing => "⋯".to_string(),
+        HealthStatus::NotApplicable => "—".to_string(),
+    }
+}
+
+fn truncate_command(command: &str, max_len: usize) -> String {
+    if command.len() > max_len {
+        format!("{}...", &command[..max_len.saturating_sub(3)])
+    } else {
+        command.to_string()
+    }
 }
 
 fn header_label(label: &str, column: SortColumn, app: &App) -> String {
