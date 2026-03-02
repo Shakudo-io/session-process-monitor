@@ -256,6 +256,24 @@ fn run_supervisor(
     let guard = Arc::new(Mutex::new(guard::Guard::new(config)));
     let policy = policy::ProtectionPolicy::new();
 
+    let commands: Vec<String> = commands
+        .into_iter()
+        .filter(|cmd| {
+            let trimmed = cmd.trim();
+            if trimmed.is_empty() {
+                eprintln!("[spm] Warning: skipping empty command");
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    if commands.is_empty() {
+        eprintln!("[spm] Error: no valid commands to run");
+        return Ok(());
+    }
+
     let mut children: Vec<supervisor::ManagedChild> = commands
         .iter()
         .enumerate()
@@ -578,7 +596,11 @@ fn run_supervisor_headless(
             events.push(event);
         }
 
+        let mut signal_shutdown = false;
         for event in &events {
+            if matches!(event, monitor::MonitorEvent::SignalShutdown) {
+                signal_shutdown = true;
+            }
             if let Some(json) = monitor::event_to_json(event) {
                 eprintln!("{}", json);
                 if let Some(ref mut file) = log_file {
@@ -586,6 +608,10 @@ fn run_supervisor_headless(
                     let _ = writeln!(file, "{}", json);
                 }
             }
+        }
+
+        if signal_shutdown {
+            break;
         }
 
         if let Ok(children) = managed.lock() {
@@ -597,9 +623,15 @@ fn run_supervisor_headless(
                     )
                 })
             {
+                let reason = if monitor::is_shutdown_requested() {
+                    "signal"
+                } else {
+                    "all_terminal"
+                };
                 let shutdown = format!(
-                    "{{\"ts\":\"{}\",\"event\":\"shutdown\",\"reason\":\"all_terminal\"}}",
-                    monitor::chrono_like_timestamp()
+                    "{{\"ts\":\"{}\",\"event\":\"shutdown\",\"reason\":\"{}\"}}",
+                    monitor::chrono_like_timestamp(),
+                    reason,
                 );
                 eprintln!("{}", shutdown);
                 if let Some(ref mut file) = log_file {

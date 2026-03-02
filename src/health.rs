@@ -122,11 +122,7 @@ fn get_listen_entries(pid: u32) -> Vec<(u16, u64)> {
                     }
                 }
             }
-            Err(error) => {
-                if !TCP_READ_WARNED.swap(true, Ordering::SeqCst) {
-                    eprintln!("[spm] Warning: failed to read {}: {}", tcp_file, error);
-                }
-            }
+            Err(_) => {}
         }
     }
     entries

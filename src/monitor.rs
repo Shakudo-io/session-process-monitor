@@ -17,6 +17,10 @@ pub fn request_shutdown() {
     SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
 }
 
+pub fn is_shutdown_requested() -> bool {
+    SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
+}
+
 #[derive(Clone, Debug)]
 pub enum MonitorEvent {
     Spawn {
@@ -81,6 +85,7 @@ pub enum MonitorEvent {
         restart_count: u32,
     },
     StateUpdate,
+    SignalShutdown,
 }
 
 pub fn event_to_json(event: &MonitorEvent) -> Option<String> {
@@ -199,6 +204,9 @@ pub fn event_to_json(event: &MonitorEvent) -> Option<String> {
             escape_json(cmd)
         )),
         MonitorEvent::StateUpdate => None,
+        MonitorEvent::SignalShutdown => Some(format!(
+            "{{\"ts\":\"{ts}\",\"event\":\"shutdown\",\"reason\":\"signal\"}}"
+        )),
     }
 }
 
@@ -353,6 +361,7 @@ pub fn spawn_monitor_thread(
                 if let Ok(mut children) = managed.lock() {
                     shutdown_children(&mut children, max_restarts, &tx);
                 }
+                let _ = tx.send(MonitorEvent::SignalShutdown);
                 break;
             }
 
@@ -496,10 +505,6 @@ pub fn spawn_monitor_thread(
                     let _ = tx.send(MonitorEvent::GuardExhausted {
                         pod_percent: percent,
                     });
-                    eprintln!(
-                    "[spm] CRITICAL: guard exhausted; no eligible processes to kill (pod={:.2}%)",
-                    percent
-                );
                 }
                 guard::GuardAction::None => {}
             }
@@ -539,11 +544,7 @@ pub fn spawn_monitor_thread(
                                         backoff_secs: child.backoff.last_delay.as_secs_f64(),
                                     });
                                 }
-                                Err(error) => {
-                                    eprintln!(
-                                        "[spm] Failed to restart '{}': {}",
-                                        child.command, error
-                                    );
+                                Err(_error) => {
                                     child.state = supervisor::ChildState::Failed;
                                     let _ = tx.send(MonitorEvent::Failed {
                                         index: child.index,
