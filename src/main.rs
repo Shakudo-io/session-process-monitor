@@ -251,6 +251,7 @@ fn run_supervisor(
         grace_ticks,
         max_restarts,
         enabled: true,
+        post_kill_cooldown: std::time::Duration::from_secs(5),
     };
     let guard = Arc::new(Mutex::new(guard::Guard::new(config)));
     let policy = policy::ProtectionPolicy::new();

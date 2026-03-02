@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
 pub struct GuardConfig {
@@ -7,6 +7,7 @@ pub struct GuardConfig {
     pub grace_ticks: u8,
     pub max_restarts: u32,
     pub enabled: bool,
+    pub post_kill_cooldown: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +57,7 @@ impl GuardConfig {
             grace_ticks: 3,
             max_restarts: 10,
             enabled: true,
+            post_kill_cooldown: Duration::from_secs(5),
         }
     }
 }
@@ -97,6 +99,15 @@ impl Guard {
         if percent < self.config.kill_threshold_percent as f64 {
             self.consecutive_ticks_above = 0;
             return GuardAction::None;
+        }
+
+        if let Some(ref last_kill) = self.last_kill {
+            if last_kill.at.elapsed() < self.config.post_kill_cooldown {
+                return GuardAction::Warning {
+                    percent,
+                    ticks_remaining: 0,
+                };
+            }
         }
 
         self.consecutive_ticks_above = self.consecutive_ticks_above.saturating_add(1);

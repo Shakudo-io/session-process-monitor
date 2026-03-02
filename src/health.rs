@@ -13,6 +13,7 @@ pub struct HealthState {
     pub consecutive_failures: u8,
     pub failure_threshold: u8,
     pub discovering_since: Option<Instant>,
+    pub baseline_ports: HashSet<u16>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,13 +50,25 @@ pub fn detect_listening_ports(pid: u32) -> Vec<u16> {
     let listen_entries = get_listen_entries(pid);
     let mut ports = Vec::new();
 
-    for (port, inode) in listen_entries {
-        if owned_inodes.contains(&inode) && !ports.contains(&port) {
-            ports.push(port);
+    for (port, inode) in &listen_entries {
+        if owned_inodes.contains(inode) && !ports.contains(port) {
+            ports.push(*port);
         }
     }
 
     ports
+}
+
+pub fn detect_listening_ports_excluding_baseline(pid: u32, baseline: &HashSet<u16>) -> Vec<u16> {
+    let all = get_all_listen_ports(pid);
+    all.into_iter().filter(|p| !baseline.contains(p)).collect()
+}
+
+fn get_all_listen_ports(pid: u32) -> Vec<u16> {
+    get_listen_entries(pid)
+        .into_iter()
+        .map(|(port, _)| port)
+        .collect()
 }
 
 fn get_owned_socket_inodes(pid: u32) -> HashSet<u64> {
@@ -202,6 +215,15 @@ impl HealthState {
             consecutive_failures: 0,
             failure_threshold: 3,
             discovering_since: None,
+            baseline_ports: HashSet::new(),
+        }
+    }
+
+    pub fn new_with_baseline(pid: u32) -> Self {
+        let baseline: HashSet<u16> = get_all_listen_ports(pid).into_iter().collect();
+        Self {
+            baseline_ports: baseline,
+            ..Self::new()
         }
     }
 
@@ -221,8 +243,12 @@ impl HealthState {
                 }
 
                 if let Some(pid) = pid {
-                    let ports = detect_listening_ports(pid);
-                    if let Some(&port) = ports.first() {
+                    let new_ports = if !self.baseline_ports.is_empty() {
+                        detect_listening_ports_excluding_baseline(pid, &self.baseline_ports)
+                    } else {
+                        detect_listening_ports(pid)
+                    };
+                    if let Some(&port) = new_ports.first() {
                         self.port = Some(port);
                         self.status = HealthStatus::Probing;
                     }

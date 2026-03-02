@@ -154,6 +154,7 @@ pub fn spawn_child(child: &mut ManagedChild, headless: bool) -> Result<SpawnedCh
     child.started_at = Some(Instant::now());
     child.backoff.stable_since = Some(Instant::now());
     child.log_path = log_path;
+    child.health = crate::health::HealthState::new_with_baseline(pid);
 
     Ok(SpawnedChild {
         pid,
