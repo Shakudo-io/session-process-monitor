@@ -1102,6 +1102,7 @@ fn run_supervisor_app(
             if let Ok(guard) = guard.lock() {
                 app.guard = Some(guard.clone());
             }
+            app.read_other_instances_state();
 
             if !app.managed_children.is_empty()
                 && app.managed_children.iter().all(|child| {
