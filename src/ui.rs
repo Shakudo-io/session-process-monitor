@@ -625,15 +625,17 @@ fn render_danger_marker(frame: &mut Frame, area: Rect, block: &Block, percent: u
         return;
     }
 
-    let width = inner.width as usize;
-    let position = ((percent as f64 / 100.0) * (width.saturating_sub(1) as f64)).round() as usize;
-    let mut marker_line = vec![' '; width];
-    let index = position.min(width.saturating_sub(1));
-    marker_line[index] = '│';
-    let marker: String = marker_line.into_iter().collect();
-    let marker_widget =
-        Paragraph::new(marker).style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
-    frame.render_widget(marker_widget, inner);
+    let position =
+        ((percent as f64 / 100.0) * (inner.width.saturating_sub(1) as f64)).round() as u16;
+    let x = inner.x + position.min(inner.width.saturating_sub(1));
+    let y = inner.y;
+
+    let buf = frame.buffer_mut();
+    if x < buf.area().right() && y < buf.area().bottom() {
+        buf[(x, y)]
+            .set_char('│')
+            .set_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD));
+    }
 }
 
 fn status_line(app: &App) -> (String, Style) {
@@ -814,7 +816,7 @@ fn render_managed_processes(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     );
 
     let rows = app.managed_children.iter().map(|child| {
-        let command = truncate_command(&child.command, 30);
+        let command = child.command.clone();
         let state = child_state_label(&child.state);
         let health = health_label(&child.health.status, child.health.port);
 
@@ -832,7 +834,7 @@ fn render_managed_processes(frame: &mut Frame, area: Rect, app: &App, theme: &Th
         rows,
         [
             Constraint::Length(3),
-            Constraint::Min(30),
+            Constraint::Fill(1),
             Constraint::Length(12),
             Constraint::Length(10),
             Constraint::Length(12),

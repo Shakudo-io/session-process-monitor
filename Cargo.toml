@@ -1,6 +1,6 @@
 [package]
 name = "session-process-monitor"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 authors = ["Shakudo Inc."]
 description = "Process supervisor and TUI for monitoring memory, CPU, and disk I/O in Kubernetes pods — with preemptive OOM guard"
