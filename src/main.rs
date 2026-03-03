@@ -670,6 +670,8 @@ fn run_supervisor_app(
                     }
                 } else if app.show_cmdline.is_some() {
                     app.show_cmdline = None;
+                } else if app.show_log.is_some() {
+                    app.show_log = None;
                 } else {
                     let mut recording_to_load: Option<String> = None;
                     let mut recording_to_delete: Option<String> = None;
@@ -912,9 +914,65 @@ fn run_supervisor_app(
                                         app.view_state.sort_column =
                                             next_sort_column(app.view_state.sort_column);
                                     }
-                                    KeyCode::Char('S') | KeyCode::Char('r') => {
+                                    KeyCode::Char('S') => {
                                         app.view_state.sort_ascending =
                                             !app.view_state.sort_ascending;
+                                    }
+                                    KeyCode::Char('r') => {
+                                        if app.focus == app::FocusPane::Managed {
+                                            if let Some(child) =
+                                                app.managed_children.get(app.selected_managed)
+                                            {
+                                                if child.pid.is_some() {
+                                                    app.restart_requested = Some(child.index);
+                                                    app.set_status_message(format!(
+                                                        "Restarting '{}'...",
+                                                        child.command
+                                                    ));
+                                                } else {
+                                                    app.set_status_message(
+                                                        "Process not running".to_string(),
+                                                    );
+                                                }
+                                            }
+                                        } else {
+                                            app.view_state.sort_ascending =
+                                                !app.view_state.sort_ascending;
+                                        }
+                                    }
+                                    KeyCode::Char('l') => {
+                                        if app.focus == app::FocusPane::Managed {
+                                            if let Some(child) =
+                                                app.managed_children.get(app.selected_managed)
+                                            {
+                                                if let Some(ref log_path) = child.log_path {
+                                                    match std::fs::read_to_string(log_path) {
+                                                        Ok(content) => {
+                                                            let lines: Vec<&str> =
+                                                                content.lines().collect();
+                                                            let start =
+                                                                lines.len().saturating_sub(50);
+                                                            let tail = lines[start..].join("\n");
+                                                            app.show_log = Some((
+                                                                format!(
+                                                                    "{} — {}",
+                                                                    child.command,
+                                                                    log_path.display()
+                                                                ),
+                                                                tail,
+                                                            ));
+                                                        }
+                                                        Err(e) => app.set_status_message(format!(
+                                                            "Cannot read log: {e}"
+                                                        )),
+                                                    }
+                                                } else {
+                                                    app.set_status_message(
+                                                        "No log file (headless mode)".to_string(),
+                                                    );
+                                                }
+                                            }
+                                        }
                                     }
                                     _ => {}
                                 }
@@ -1023,6 +1081,17 @@ fn run_supervisor_app(
                     saw_state_update = true;
                 }
                 _ => {}
+            }
+        }
+
+        if let Some(restart_idx) = app.restart_requested.take() {
+            if let Ok(mut children) = managed.lock() {
+                if let Some(child) = children.get_mut(restart_idx) {
+                    if let Some(pgid) = child.pgid {
+                        let _ = crate::process::kill_process_group(pgid, false);
+                        child.state = crate::supervisor::ChildState::Stopping { emergency: false };
+                    }
+                }
             }
         }
 

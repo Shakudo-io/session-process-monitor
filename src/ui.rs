@@ -68,6 +68,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some((pid, name, cmdline)) = &app.show_cmdline {
         draw_cmdline_modal(frame, *pid, name, cmdline, &theme);
     }
+
+    if let Some((ref title, ref content)) = app.show_log {
+        draw_log_modal(frame, title, content, &theme);
+    }
 }
 
 fn draw_live(frame: &mut Frame, app: &App, theme: &Theme) {
@@ -312,6 +316,31 @@ fn draw_cmdline_modal(frame: &mut Frame, pid: u32, name: &str, cmdline: &str, th
         .wrap(ratatui::widgets::Wrap { trim: false })
         .block(block);
     frame.render_widget(content, area);
+}
+
+fn draw_log_modal(frame: &mut Frame, title: &str, content: &str, theme: &Theme) {
+    let area = frame.area();
+    let w = (area.width as f32 * 0.85) as u16;
+    let h = (area.height as f32 * 0.7) as u16;
+    let x = (area.width.saturating_sub(w)) / 2;
+    let y = (area.height.saturating_sub(h)) / 2;
+    let modal = Rect::new(x, y, w, h);
+    frame.render_widget(ratatui::widgets::Clear, modal);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.accent))
+        .title(format!(" Log: {} (any key to close) ", title))
+        .title_style(
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.bg));
+    let text = Paragraph::new(content.to_string())
+        .style(Style::default().fg(theme.fg))
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .block(block);
+    frame.render_widget(text, modal);
 }
 
 fn render_gauges(
@@ -678,7 +707,7 @@ fn status_line(app: &App) -> (String, Style) {
     };
 
     let keys = if app.supervisor_mode {
-        "q: quit | k: kill | Tab: switch pane | w: watch | R: recordings | s: sort | /: filter"
+        "q: quit | k: kill | r: restart | l: logs | Tab: switch pane | w: watch | R: recordings | s: sort | /: filter"
     } else {
         "q: quit | k: kill | w: watch | R: recordings | s: sort | /: filter | ↑/↓: select"
     };
