@@ -106,6 +106,14 @@ pub struct App {
     pub supervisor_mode: bool,
     pub local_supervisor: bool,
     pub dark_mode: bool,
+    pub focus: FocusPane,
+    pub selected_managed: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum FocusPane {
+    Processes,
+    Managed,
 }
 
 impl App {
@@ -145,7 +153,9 @@ impl App {
             guard_alert: None,
             supervisor_mode: false,
             local_supervisor: false,
-            dark_mode: false,
+            dark_mode: true,
+            focus: FocusPane::Processes,
+            selected_managed: 0,
         }
     }
 

@@ -819,21 +819,63 @@ fn run_supervisor_app(
                                             selected: 0,
                                         });
                                     }
-                                    KeyCode::Up => {
-                                        if !app.processes.is_empty() {
-                                            app.view_state.selected =
-                                                app.view_state.selected.saturating_sub(1);
+                                    KeyCode::Tab | KeyCode::BackTab => {
+                                        if app.supervisor_mode && !app.managed_children.is_empty() {
+                                            app.focus = match app.focus {
+                                                app::FocusPane::Processes => {
+                                                    app::FocusPane::Managed
+                                                }
+                                                app::FocusPane::Managed => {
+                                                    app::FocusPane::Processes
+                                                }
+                                            };
                                         }
                                     }
-                                    KeyCode::Down => {
-                                        if !app.processes.is_empty() {
-                                            let max_index = app.processes.len().saturating_sub(1);
-                                            app.view_state.selected =
-                                                (app.view_state.selected + 1).min(max_index);
+                                    KeyCode::Up => match app.focus {
+                                        app::FocusPane::Processes => {
+                                            if !app.processes.is_empty() {
+                                                app.view_state.selected =
+                                                    app.view_state.selected.saturating_sub(1);
+                                            }
                                         }
-                                    }
+                                        app::FocusPane::Managed => {
+                                            app.selected_managed =
+                                                app.selected_managed.saturating_sub(1);
+                                        }
+                                    },
+                                    KeyCode::Down => match app.focus {
+                                        app::FocusPane::Processes => {
+                                            if !app.processes.is_empty() {
+                                                let max_index =
+                                                    app.processes.len().saturating_sub(1);
+                                                app.view_state.selected =
+                                                    (app.view_state.selected + 1).min(max_index);
+                                            }
+                                        }
+                                        app::FocusPane::Managed => {
+                                            if !app.managed_children.is_empty() {
+                                                let max_index =
+                                                    app.managed_children.len().saturating_sub(1);
+                                                app.selected_managed =
+                                                    (app.selected_managed + 1).min(max_index);
+                                            }
+                                        }
+                                    },
                                     KeyCode::Char('k') => {
-                                        if let Some(process) = app.selected_process() {
+                                        if app.focus == app::FocusPane::Managed {
+                                            if let Some(child) =
+                                                app.managed_children.get(app.selected_managed)
+                                            {
+                                                app.confirm_kill = Some(KillConfirmation {
+                                                    target: KillTarget::Managed {
+                                                        index: child.index,
+                                                        command: child.command.clone(),
+                                                        pid: child.pid,
+                                                        pgid: child.pgid,
+                                                    },
+                                                });
+                                            }
+                                        } else if let Some(process) = app.selected_process() {
                                             let managed_target = app
                                                 .managed_children
                                                 .iter()

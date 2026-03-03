@@ -37,11 +37,11 @@ impl Theme {
         Self {
             bg: Color::Reset,
             bg_alt: Color::Reset,
-            fg: Color::Black,
+            fg: Color::Reset,
             fg_dim: Color::DarkGray,
-            border: Color::Gray,
-            accent: Color::Blue,
-            highlight_bg: Color::Gray,
+            border: Color::DarkGray,
+            accent: Color::Cyan,
+            highlight_bg: Color::DarkGray,
         }
     }
 }
@@ -677,7 +677,11 @@ fn status_line(app: &App) -> (String, Style) {
         )
     };
 
-    let keys = "q: quit | k: kill | w: watch | R: recordings | s: sort | /: filter | ↑/↓: select";
+    let keys = if app.supervisor_mode {
+        "q: quit | k: kill | Tab: switch pane | w: watch | R: recordings | s: sort | /: filter"
+    } else {
+        "q: quit | k: kill | w: watch | R: recordings | s: sort | /: filter | ↑/↓: select"
+    };
 
     if !app.view_state.filter.trim().is_empty() {
         return (
@@ -810,13 +814,26 @@ fn render_managed_processes(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.border))
-            .title("Managed Processes"),
+            .border_style(
+                Style::default().fg(if app.focus == crate::app::FocusPane::Managed {
+                    theme.accent
+                } else {
+                    theme.border
+                }),
+            )
+            .title(if app.focus == crate::app::FocusPane::Managed {
+                "Managed Processes [focused]"
+            } else {
+                "Managed Processes [Tab to focus]"
+            }),
     )
     .column_spacing(1)
-    .row_highlight_style(Style::default().bg(theme.highlight_bg));
+    .row_highlight_style(Style::default().bg(theme.highlight_bg).fg(Color::White));
 
     let mut table_state = TableState::default();
+    if app.focus == crate::app::FocusPane::Managed && !app.managed_children.is_empty() {
+        table_state.select(Some(app.selected_managed));
+    }
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
