@@ -187,6 +187,8 @@ impl App {
 
         if !self.local_supervisor {
             self.read_shared_state();
+        } else {
+            self.read_other_instances_state();
         }
 
         let mut processes = proc::collect_processes();
@@ -295,9 +297,11 @@ impl App {
     }
 
     pub fn read_shared_state(&mut self) {
-        let path = "/tmp/spm-state.json";
-        let content = match std::fs::read_to_string(path) {
-            Ok(content) => content,
+        let mut all_children = Vec::new();
+        let mut best_guard: Option<crate::guard::Guard> = None;
+
+        let entries = match std::fs::read_dir("/tmp") {
+            Ok(e) => e,
             Err(_) => {
                 self.managed_children.clear();
                 self.guard = None;
@@ -306,26 +310,91 @@ impl App {
             }
         };
 
-        let timestamp = match extract_json_string(&content, "timestamp") {
-            Some(value) => value,
-            None => {
-                self.managed_children.clear();
-                self.guard = None;
-                self.supervisor_mode = false;
-                return;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !name_str.starts_with("spm-state-") || !name_str.ends_with(".json") {
+                continue;
             }
-        };
 
-        if !is_timestamp_fresh(&timestamp, 5) {
-            self.managed_children.clear();
-            self.guard = None;
-            self.supervisor_mode = false;
-            return;
+            let content = match std::fs::read_to_string(entry.path()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let timestamp = match extract_json_string(&content, "timestamp") {
+                Some(v) => v,
+                None => continue,
+            };
+
+            if !is_timestamp_fresh(&timestamp, 5) {
+                let _ = std::fs::remove_file(entry.path());
+                continue;
+            }
+
+            let children = parse_child_snapshots(&content);
+            let child_offset = all_children.len();
+            for mut child in children {
+                child.index += child_offset;
+                all_children.push(child);
+            }
+
+            if best_guard.is_none() {
+                best_guard = parse_guard_snapshot(&content);
+            }
         }
 
-        self.managed_children = parse_child_snapshots(&content);
-        self.guard = parse_guard_snapshot(&content);
+        self.managed_children = all_children;
+        self.guard = best_guard;
         self.supervisor_mode = !self.managed_children.is_empty();
+    }
+
+    pub fn read_other_instances_state(&mut self) {
+        let my_pid = std::process::id();
+        let my_file = format!("spm-state-{my_pid}.json");
+
+        let entries = match std::fs::read_dir("/tmp") {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        let local_count = self.managed_children.len();
+        let mut remote_children = Vec::new();
+
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !name_str.starts_with("spm-state-") || !name_str.ends_with(".json") {
+                continue;
+            }
+            if name_str == my_file {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(entry.path()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let timestamp = match extract_json_string(&content, "timestamp") {
+                Some(v) => v,
+                None => continue,
+            };
+
+            if !is_timestamp_fresh(&timestamp, 5) {
+                let _ = std::fs::remove_file(entry.path());
+                continue;
+            }
+
+            let children = parse_child_snapshots(&content);
+            let offset = local_count + remote_children.len();
+            for mut child in children {
+                child.index = offset + child.index;
+                remote_children.push(child);
+            }
+        }
+
+        self.managed_children.extend(remote_children);
     }
 
     pub fn set_status_message(&mut self, text: String) {

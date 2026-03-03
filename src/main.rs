@@ -1117,7 +1117,7 @@ fn run_supervisor_headless(
         }
 
         if signal_shutdown {
-            let _ = std::fs::remove_file("/tmp/spm-state.json");
+            monitor::remove_shared_state();
             break;
         }
 
@@ -1145,7 +1145,7 @@ fn run_supervisor_headless(
                     use std::io::Write;
                     let _ = writeln!(file, "{}", shutdown);
                 }
-                let _ = std::fs::remove_file("/tmp/spm-state.json");
+                monitor::remove_shared_state();
                 break;
             }
         }

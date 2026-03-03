@@ -278,14 +278,20 @@ fn write_shared_state(children: &[supervisor::ManagedChild], guard: &guard::Guar
     let state = build_shared_state(children, guard);
     let json = shared_state_to_json(&state);
 
-    let tmp_path = "/tmp/spm-state.json.tmp";
-    let final_path = "/tmp/spm-state.json";
+    let pid = std::process::id();
+    let tmp_path = format!("/tmp/spm-state-{pid}.json.tmp");
+    let final_path = format!("/tmp/spm-state-{pid}.json");
 
-    if let Ok(mut file) = std::fs::File::create(tmp_path) {
+    if let Ok(mut file) = std::fs::File::create(&tmp_path) {
         use std::io::Write;
         let _ = file.write_all(json.as_bytes());
-        let _ = std::fs::rename(tmp_path, final_path);
+        let _ = std::fs::rename(&tmp_path, &final_path);
     }
+}
+
+pub fn remove_shared_state() {
+    let pid = std::process::id();
+    let _ = std::fs::remove_file(format!("/tmp/spm-state-{pid}.json"));
 }
 
 fn build_shared_state(children: &[supervisor::ManagedChild], guard: &guard::Guard) -> SharedState {
@@ -626,7 +632,7 @@ fn shutdown_children(
         }
     }
 
-    let _ = std::fs::remove_file("/tmp/spm-state.json");
+    remove_shared_state();
 }
 
 fn reap_zombies(
