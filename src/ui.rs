@@ -829,6 +829,7 @@ fn render_managed_processes(frame: &mut Frame, area: Rect, app: &App, theme: &Th
             health,
             child.restart_count.to_string(),
         ])
+        .style(Style::default().fg(theme.fg).bg(theme.bg))
     });
 
     let table = Table::new(
