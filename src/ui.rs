@@ -812,6 +812,7 @@ fn render_managed_processes(frame: &mut Frame, area: Rect, app: &App, theme: &Th
     .style(
         Style::default()
             .fg(theme.accent)
+            .bg(theme.bg_alt)
             .add_modifier(Modifier::BOLD),
     );
 
@@ -856,7 +857,8 @@ fn render_managed_processes(frame: &mut Frame, area: Rect, app: &App, theme: &Th
                 "Managed Processes [focused]"
             } else {
                 "Managed Processes [Tab to focus]"
-            }),
+            })
+            .style(Style::default().bg(theme.bg)),
     )
     .column_spacing(1)
     .row_highlight_style(Style::default().bg(theme.highlight_bg).fg(Color::White));
