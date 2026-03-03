@@ -138,279 +138,267 @@ fn run_app(
     let tick_rate = Duration::from_secs(1);
 
     while app.running {
-        let timeout = Duration::from_millis(100);
-        if event::poll(timeout)? {
-            if let Event::Key(key_event) = event::read()? {
-                if let Some(confirm) = app.confirm_kill.clone() {
-                    match key_event.code {
-                        KeyCode::Char('y') => {
-                            let outcome = match confirm.target {
-                                KillTarget::Process { pid, .. } => {
-                                    match process::terminate_process(pid) {
-                                        Ok(message) => message,
-                                        Err(message) => message,
-                                    }
+        let mut poll_timeout = Duration::from_millis(100);
+        while event::poll(poll_timeout)? {
+            poll_timeout = Duration::ZERO;
+            let Event::Key(key_event) = event::read()? else {
+                continue;
+            };
+            if let Some(confirm) = app.confirm_kill.clone() {
+                match key_event.code {
+                    KeyCode::Char('y') => {
+                        let outcome = match confirm.target {
+                            KillTarget::Process { pid, .. } => {
+                                match process::terminate_process(pid) {
+                                    Ok(message) => message,
+                                    Err(message) => message,
                                 }
-                                KillTarget::Managed { pgid, .. } => match pgid {
-                                    Some(pgid) => match process::kill_process_group(pgid, false) {
-                                        Ok(message) => message,
-                                        Err(message) => message,
-                                    },
-                                    None => "Managed process missing pgid".to_string(),
+                            }
+                            KillTarget::Managed { pgid, .. } => match pgid {
+                                Some(pgid) => match process::kill_process_group(pgid, false) {
+                                    Ok(message) => message,
+                                    Err(message) => message,
                                 },
-                            };
-                            app.set_status_message(outcome);
-                            app.confirm_kill = None;
+                                None => "Managed process missing pgid".to_string(),
+                            },
+                        };
+                        app.set_status_message(outcome);
+                        app.confirm_kill = None;
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        app.confirm_kill = None;
+                    }
+                    _ => {}
+                }
+            } else if app.show_cmdline.is_some() {
+                app.show_cmdline = None;
+            } else {
+                let mut recording_to_load: Option<String> = None;
+                let mut recording_to_delete: Option<String> = None;
+                let mut close_recording_list = false;
+                let mut list_selected = 0;
+                let mut was_recording_list = false;
+                let mut exit_replay = false;
+
+                match &mut app.mode {
+                    AppMode::RecordingList(list_state) => {
+                        was_recording_list = true;
+                        match key_event.code {
+                            KeyCode::Up => {
+                                if !list_state.recordings.is_empty() {
+                                    list_state.selected = list_state.selected.saturating_sub(1);
+                                }
+                            }
+                            KeyCode::Down => {
+                                if !list_state.recordings.is_empty() {
+                                    let max_index = list_state.recordings.len().saturating_sub(1);
+                                    list_state.selected = (list_state.selected + 1).min(max_index);
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(recording) =
+                                    list_state.recordings.get(list_state.selected)
+                                {
+                                    recording_to_load = Some(recording.id.clone());
+                                }
+                            }
+                            KeyCode::Char('d') => {
+                                if let Some(recording) =
+                                    list_state.recordings.get(list_state.selected)
+                                {
+                                    recording_to_delete = Some(recording.id.clone());
+                                }
+                            }
+                            KeyCode::Esc => {
+                                close_recording_list = true;
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char('n') | KeyCode::Esc => {
-                            app.confirm_kill = None;
+                        list_selected = list_state.selected;
+                    }
+                    AppMode::Replay(state) => match key_event.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            exit_replay = true;
+                        }
+                        KeyCode::Left => {
+                            state.current_index = state.current_index.saturating_sub(1);
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Right => {
+                            let max_index = state.recording.snapshots.len().saturating_sub(1);
+                            if state.current_index < max_index {
+                                state.current_index += 1;
+                            }
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::PageUp => {
+                            state.current_index = state.current_index.saturating_sub(10);
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::PageDown => {
+                            let max_index = state.recording.snapshots.len().saturating_sub(1);
+                            state.current_index = (state.current_index + 10).min(max_index);
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Home => {
+                            state.current_index = 0;
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::End => {
+                            state.current_index = state.recording.snapshots.len().saturating_sub(1);
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Char(' ') => {
+                            state.playing = !state.playing;
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Char('+') => {
+                            state.speed = state.speed.next();
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Char('-') => {
+                            state.speed = state.speed.prev();
+                            state.last_advance_time = Instant::now();
                         }
                         _ => {}
-                    }
-                } else if app.show_cmdline.is_some() {
-                    app.show_cmdline = None;
-                } else {
-                    let mut recording_to_load: Option<String> = None;
-                    let mut recording_to_delete: Option<String> = None;
-                    let mut close_recording_list = false;
-                    let mut list_selected = 0;
-                    let mut was_recording_list = false;
-                    let mut exit_replay = false;
-
-                    match &mut app.mode {
-                        AppMode::RecordingList(list_state) => {
-                            was_recording_list = true;
+                    },
+                    AppMode::Live => {
+                        if app.view_state.filter_active {
+                            let previous_filter = app.view_state.filter.clone();
                             match key_event.code {
-                                KeyCode::Up => {
-                                    if !list_state.recordings.is_empty() {
-                                        list_state.selected = list_state.selected.saturating_sub(1);
-                                    }
+                                KeyCode::Char(ch) => {
+                                    app.view_state.filter.push(ch);
                                 }
-                                KeyCode::Down => {
-                                    if !list_state.recordings.is_empty() {
-                                        let max_index =
-                                            list_state.recordings.len().saturating_sub(1);
-                                        list_state.selected =
-                                            (list_state.selected + 1).min(max_index);
-                                    }
-                                }
-                                KeyCode::Enter => {
-                                    if let Some(recording) =
-                                        list_state.recordings.get(list_state.selected)
-                                    {
-                                        recording_to_load = Some(recording.id.clone());
-                                    }
-                                }
-                                KeyCode::Char('d') => {
-                                    if let Some(recording) =
-                                        list_state.recordings.get(list_state.selected)
-                                    {
-                                        recording_to_delete = Some(recording.id.clone());
-                                    }
+                                KeyCode::Backspace => {
+                                    app.view_state.filter.pop();
                                 }
                                 KeyCode::Esc => {
-                                    close_recording_list = true;
+                                    app.view_state.filter.clear();
+                                    app.view_state.filter_active = false;
+                                }
+                                KeyCode::Enter => {
+                                    app.view_state.filter_active = false;
                                 }
                                 _ => {}
                             }
-                            list_selected = list_state.selected;
-                        }
-                        AppMode::Replay(state) => match key_event.code {
-                            KeyCode::Esc | KeyCode::Char('q') => {
-                                exit_replay = true;
+                            if app.view_state.filter != previous_filter {
+                                app.view_state.selected = 0;
                             }
-                            KeyCode::Left => {
-                                state.current_index = state.current_index.saturating_sub(1);
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Right => {
-                                let max_index = state.recording.snapshots.len().saturating_sub(1);
-                                if state.current_index < max_index {
-                                    state.current_index += 1;
+                        } else {
+                            match key_event.code {
+                                KeyCode::Char('q') => {
+                                    app.running = false;
                                 }
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::PageUp => {
-                                state.current_index = state.current_index.saturating_sub(10);
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::PageDown => {
-                                let max_index = state.recording.snapshots.len().saturating_sub(1);
-                                state.current_index = (state.current_index + 10).min(max_index);
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Home => {
-                                state.current_index = 0;
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::End => {
-                                state.current_index =
-                                    state.recording.snapshots.len().saturating_sub(1);
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Char(' ') => {
-                                state.playing = !state.playing;
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Char('+') => {
-                                state.speed = state.speed.next();
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Char('-') => {
-                                state.speed = state.speed.prev();
-                                state.last_advance_time = Instant::now();
-                            }
-                            _ => {}
-                        },
-                        AppMode::Live => {
-                            if app.view_state.filter_active {
-                                let previous_filter = app.view_state.filter.clone();
-                                match key_event.code {
-                                    KeyCode::Char(ch) => {
-                                        app.view_state.filter.push(ch);
-                                    }
-                                    KeyCode::Backspace => {
-                                        app.view_state.filter.pop();
-                                    }
-                                    KeyCode::Esc => {
+                                KeyCode::Esc => {
+                                    if !app.view_state.filter.is_empty() {
                                         app.view_state.filter.clear();
-                                        app.view_state.filter_active = false;
-                                    }
-                                    KeyCode::Enter => {
-                                        app.view_state.filter_active = false;
-                                    }
-                                    _ => {}
-                                }
-                                if app.view_state.filter != previous_filter {
-                                    app.view_state.selected = 0;
-                                }
-                            } else {
-                                match key_event.code {
-                                    KeyCode::Char('q') => {
+                                        app.view_state.selected = 0;
+                                    } else {
                                         app.running = false;
                                     }
-                                    KeyCode::Esc => {
-                                        if !app.view_state.filter.is_empty() {
-                                            app.view_state.filter.clear();
-                                            app.view_state.selected = 0;
-                                        } else {
-                                            app.running = false;
-                                        }
-                                    }
-                                    KeyCode::Char('/') => {
-                                        app.view_state.filter_active = true;
-                                    }
-                                    KeyCode::Enter => {
-                                        if let Some(process) = app.selected_process() {
-                                            app.show_cmdline = Some((
-                                                process.pid,
-                                                process.name.clone(),
-                                                process.cmdline.clone(),
-                                            ));
-                                        }
-                                    }
-                                    KeyCode::Char('R') => {
-                                        let recordings = app.recording_manager.list_recordings();
-                                        app.mode = AppMode::RecordingList(RecordingListState {
-                                            recordings,
-                                            selected: 0,
-                                        });
-                                    }
-                                    KeyCode::Up => {
-                                        if !app.processes.is_empty() {
-                                            app.view_state.selected =
-                                                app.view_state.selected.saturating_sub(1);
-                                        }
-                                    }
-                                    KeyCode::Down => {
-                                        if !app.processes.is_empty() {
-                                            let max_index = app.processes.len().saturating_sub(1);
-                                            app.view_state.selected =
-                                                (app.view_state.selected + 1).min(max_index);
-                                        }
-                                    }
-                                    KeyCode::Char('k') => {
-                                        if let Some(process) = app.selected_process() {
-                                            app.confirm_kill = Some(KillConfirmation {
-                                                target: KillTarget::Process {
-                                                    pid: process.pid,
-                                                    name: process.name.clone(),
-                                                    is_system: process.is_system,
-                                                },
-                                            });
-                                        } else {
-                                            app.set_status_message(
-                                                "No process selected".to_string(),
-                                            );
-                                        }
-                                    }
-                                    KeyCode::Char('w') => {
-                                        app.toggle_watch();
-                                    }
-                                    KeyCode::Char('s') => {
-                                        app.view_state.sort_column =
-                                            next_sort_column(app.view_state.sort_column);
-                                    }
-                                    KeyCode::Char('S') | KeyCode::Char('r') => {
-                                        app.view_state.sort_ascending =
-                                            !app.view_state.sort_ascending;
-                                    }
-                                    _ => {}
                                 }
-                            }
-                        }
-                    }
-
-                    if exit_replay {
-                        app.mode = AppMode::Live;
-                    }
-
-                    if let Some(recording_id) = recording_to_load {
-                        match app.recording_manager.load_recording(&recording_id) {
-                            Ok(recording) => {
-                                if recording.snapshots.is_empty() {
-                                    app.set_status_message(
-                                        "Recording has no snapshots".to_string(),
-                                    );
-                                } else {
-                                    app.mode = AppMode::Replay(ReplayState {
-                                        recording,
-                                        current_index: 0,
-                                        speed: PlaybackSpeed::Normal,
-                                        playing: false,
-                                        last_advance_time: Instant::now(),
+                                KeyCode::Char('/') => {
+                                    app.view_state.filter_active = true;
+                                }
+                                KeyCode::Enter => {
+                                    if let Some(process) = app.selected_process() {
+                                        app.show_cmdline = Some((
+                                            process.pid,
+                                            process.name.clone(),
+                                            process.cmdline.clone(),
+                                        ));
+                                    }
+                                }
+                                KeyCode::Char('R') => {
+                                    let recordings = app.recording_manager.list_recordings();
+                                    app.mode = AppMode::RecordingList(RecordingListState {
+                                        recordings,
+                                        selected: 0,
                                     });
                                 }
+                                KeyCode::Up => {
+                                    if !app.processes.is_empty() {
+                                        app.view_state.selected =
+                                            app.view_state.selected.saturating_sub(1);
+                                    }
+                                }
+                                KeyCode::Down => {
+                                    if !app.processes.is_empty() {
+                                        let max_index = app.processes.len().saturating_sub(1);
+                                        app.view_state.selected =
+                                            (app.view_state.selected + 1).min(max_index);
+                                    }
+                                }
+                                KeyCode::Char('k') => {
+                                    if let Some(process) = app.selected_process() {
+                                        app.confirm_kill = Some(KillConfirmation {
+                                            target: KillTarget::Process {
+                                                pid: process.pid,
+                                                name: process.name.clone(),
+                                                is_system: process.is_system,
+                                            },
+                                        });
+                                    } else {
+                                        app.set_status_message("No process selected".to_string());
+                                    }
+                                }
+                                KeyCode::Char('w') => {
+                                    app.toggle_watch();
+                                }
+                                KeyCode::Char('s') => {
+                                    app.view_state.sort_column =
+                                        next_sort_column(app.view_state.sort_column);
+                                }
+                                KeyCode::Char('S') | KeyCode::Char('r') => {
+                                    app.view_state.sort_ascending = !app.view_state.sort_ascending;
+                                }
+                                _ => {}
                             }
-                            Err(error) => {
-                                app.set_status_message(format!(
-                                    "Failed to load recording: {}",
-                                    error
-                                ));
-                            }
                         }
-                    } else if let Some(recording_id) = recording_to_delete {
-                        if let Err(error) = app.recording_manager.delete_recording(&recording_id) {
-                            app.set_status_message(format!(
-                                "Failed to delete recording: {}",
-                                error
-                            ));
-                        }
-                        if was_recording_list {
-                            let recordings = app.recording_manager.list_recordings();
-                            let selected = if recordings.is_empty() {
-                                0
-                            } else {
-                                list_selected.min(recordings.len().saturating_sub(1))
-                            };
-                            app.mode = AppMode::RecordingList(RecordingListState {
-                                recordings,
-                                selected,
-                            });
-                        }
-                    } else if close_recording_list {
-                        app.mode = AppMode::Live;
                     }
+                }
+
+                if exit_replay {
+                    app.mode = AppMode::Live;
+                }
+
+                if let Some(recording_id) = recording_to_load {
+                    match app.recording_manager.load_recording(&recording_id) {
+                        Ok(recording) => {
+                            if recording.snapshots.is_empty() {
+                                app.set_status_message("Recording has no snapshots".to_string());
+                            } else {
+                                app.mode = AppMode::Replay(ReplayState {
+                                    recording,
+                                    current_index: 0,
+                                    speed: PlaybackSpeed::Normal,
+                                    playing: false,
+                                    last_advance_time: Instant::now(),
+                                });
+                            }
+                        }
+                        Err(error) => {
+                            app.set_status_message(format!("Failed to load recording: {}", error));
+                        }
+                    }
+                } else if let Some(recording_id) = recording_to_delete {
+                    if let Err(error) = app.recording_manager.delete_recording(&recording_id) {
+                        app.set_status_message(format!("Failed to delete recording: {}", error));
+                    }
+                    if was_recording_list {
+                        let recordings = app.recording_manager.list_recordings();
+                        let selected = if recordings.is_empty() {
+                            0
+                        } else {
+                            list_selected.min(recordings.len().saturating_sub(1))
+                        };
+                        app.mode = AppMode::RecordingList(RecordingListState {
+                            recordings,
+                            selected,
+                        });
+                    }
+                } else if close_recording_list {
+                    app.mode = AppMode::Live;
                 }
             }
         }
@@ -639,397 +627,379 @@ fn run_supervisor_app(
     let tick_rate = Duration::from_secs(1);
 
     while app.running {
-        let timeout = Duration::from_millis(100);
-        if event::poll(timeout)? {
-            if let Event::Key(key_event) = event::read()? {
-                if let Some(confirm) = app.confirm_kill.clone() {
-                    match key_event.code {
-                        KeyCode::Char('y') => {
-                            let outcome = match confirm.target {
-                                KillTarget::Process { pid, .. } => {
-                                    match process::terminate_process(pid) {
-                                        Ok(message) => message,
-                                        Err(message) => message,
-                                    }
+        let mut poll_timeout = Duration::from_millis(100);
+        while event::poll(poll_timeout)? {
+            poll_timeout = Duration::ZERO;
+            let Event::Key(key_event) = event::read()? else {
+                continue;
+            };
+            if let Some(confirm) = app.confirm_kill.clone() {
+                match key_event.code {
+                    KeyCode::Char('y') => {
+                        let outcome = match confirm.target {
+                            KillTarget::Process { pid, .. } => {
+                                match process::terminate_process(pid) {
+                                    Ok(message) => message,
+                                    Err(message) => message,
                                 }
-                                KillTarget::Managed { pgid, .. } => match pgid {
-                                    Some(pgid) => match process::kill_process_group(pgid, false) {
-                                        Ok(message) => message,
-                                        Err(message) => message,
-                                    },
-                                    None => "Managed process missing pgid".to_string(),
+                            }
+                            KillTarget::Managed { pgid, .. } => match pgid {
+                                Some(pgid) => match process::kill_process_group(pgid, false) {
+                                    Ok(message) => message,
+                                    Err(message) => message,
                                 },
-                            };
-                            app.set_status_message(outcome);
-                            app.confirm_kill = None;
+                                None => "Managed process missing pgid".to_string(),
+                            },
+                        };
+                        app.set_status_message(outcome);
+                        app.confirm_kill = None;
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => {
+                        app.confirm_kill = None;
+                    }
+                    _ => {}
+                }
+            } else if app.show_cmdline.is_some() {
+                app.show_cmdline = None;
+            } else if app.show_log.is_some() {
+                app.show_log = None;
+            } else {
+                let mut recording_to_load: Option<String> = None;
+                let mut recording_to_delete: Option<String> = None;
+                let mut close_recording_list = false;
+                let mut list_selected = 0;
+                let mut was_recording_list = false;
+                let mut exit_replay = false;
+
+                match &mut app.mode {
+                    AppMode::RecordingList(list_state) => {
+                        was_recording_list = true;
+                        match key_event.code {
+                            KeyCode::Up => {
+                                if !list_state.recordings.is_empty() {
+                                    list_state.selected = list_state.selected.saturating_sub(1);
+                                }
+                            }
+                            KeyCode::Down => {
+                                if !list_state.recordings.is_empty() {
+                                    let max_index = list_state.recordings.len().saturating_sub(1);
+                                    list_state.selected = (list_state.selected + 1).min(max_index);
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Some(recording) =
+                                    list_state.recordings.get(list_state.selected)
+                                {
+                                    recording_to_load = Some(recording.id.clone());
+                                }
+                            }
+                            KeyCode::Char('d') => {
+                                if let Some(recording) =
+                                    list_state.recordings.get(list_state.selected)
+                                {
+                                    recording_to_delete = Some(recording.id.clone());
+                                }
+                            }
+                            KeyCode::Esc => {
+                                close_recording_list = true;
+                            }
+                            _ => {}
                         }
-                        KeyCode::Char('n') | KeyCode::Esc => {
-                            app.confirm_kill = None;
+                        list_selected = list_state.selected;
+                    }
+                    AppMode::Replay(state) => match key_event.code {
+                        KeyCode::Esc | KeyCode::Char('q') => {
+                            exit_replay = true;
+                        }
+                        KeyCode::Left => {
+                            state.current_index = state.current_index.saturating_sub(1);
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Right => {
+                            let max_index = state.recording.snapshots.len().saturating_sub(1);
+                            if state.current_index < max_index {
+                                state.current_index += 1;
+                            }
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::PageUp => {
+                            state.current_index = state.current_index.saturating_sub(10);
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::PageDown => {
+                            let max_index = state.recording.snapshots.len().saturating_sub(1);
+                            state.current_index = (state.current_index + 10).min(max_index);
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Home => {
+                            state.current_index = 0;
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::End => {
+                            state.current_index = state.recording.snapshots.len().saturating_sub(1);
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Char(' ') => {
+                            state.playing = !state.playing;
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Char('+') => {
+                            state.speed = state.speed.next();
+                            state.last_advance_time = Instant::now();
+                        }
+                        KeyCode::Char('-') => {
+                            state.speed = state.speed.prev();
+                            state.last_advance_time = Instant::now();
                         }
                         _ => {}
-                    }
-                } else if app.show_cmdline.is_some() {
-                    app.show_cmdline = None;
-                } else if app.show_log.is_some() {
-                    app.show_log = None;
-                } else {
-                    let mut recording_to_load: Option<String> = None;
-                    let mut recording_to_delete: Option<String> = None;
-                    let mut close_recording_list = false;
-                    let mut list_selected = 0;
-                    let mut was_recording_list = false;
-                    let mut exit_replay = false;
-
-                    match &mut app.mode {
-                        AppMode::RecordingList(list_state) => {
-                            was_recording_list = true;
+                    },
+                    AppMode::Live => {
+                        if app.view_state.filter_active {
+                            let previous_filter = app.view_state.filter.clone();
                             match key_event.code {
-                                KeyCode::Up => {
-                                    if !list_state.recordings.is_empty() {
-                                        list_state.selected = list_state.selected.saturating_sub(1);
-                                    }
+                                KeyCode::Char(ch) => {
+                                    app.view_state.filter.push(ch);
                                 }
-                                KeyCode::Down => {
-                                    if !list_state.recordings.is_empty() {
-                                        let max_index =
-                                            list_state.recordings.len().saturating_sub(1);
-                                        list_state.selected =
-                                            (list_state.selected + 1).min(max_index);
-                                    }
-                                }
-                                KeyCode::Enter => {
-                                    if let Some(recording) =
-                                        list_state.recordings.get(list_state.selected)
-                                    {
-                                        recording_to_load = Some(recording.id.clone());
-                                    }
-                                }
-                                KeyCode::Char('d') => {
-                                    if let Some(recording) =
-                                        list_state.recordings.get(list_state.selected)
-                                    {
-                                        recording_to_delete = Some(recording.id.clone());
-                                    }
+                                KeyCode::Backspace => {
+                                    app.view_state.filter.pop();
                                 }
                                 KeyCode::Esc => {
-                                    close_recording_list = true;
+                                    app.view_state.filter.clear();
+                                    app.view_state.filter_active = false;
+                                }
+                                KeyCode::Enter => {
+                                    app.view_state.filter_active = false;
                                 }
                                 _ => {}
                             }
-                            list_selected = list_state.selected;
-                        }
-                        AppMode::Replay(state) => match key_event.code {
-                            KeyCode::Esc | KeyCode::Char('q') => {
-                                exit_replay = true;
+                            if app.view_state.filter != previous_filter {
+                                app.view_state.selected = 0;
                             }
-                            KeyCode::Left => {
-                                state.current_index = state.current_index.saturating_sub(1);
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Right => {
-                                let max_index = state.recording.snapshots.len().saturating_sub(1);
-                                if state.current_index < max_index {
-                                    state.current_index += 1;
+                        } else {
+                            match key_event.code {
+                                KeyCode::Char('q') => {
+                                    monitor::request_shutdown();
+                                    app.running = false;
                                 }
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::PageUp => {
-                                state.current_index = state.current_index.saturating_sub(10);
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::PageDown => {
-                                let max_index = state.recording.snapshots.len().saturating_sub(1);
-                                state.current_index = (state.current_index + 10).min(max_index);
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Home => {
-                                state.current_index = 0;
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::End => {
-                                state.current_index =
-                                    state.recording.snapshots.len().saturating_sub(1);
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Char(' ') => {
-                                state.playing = !state.playing;
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Char('+') => {
-                                state.speed = state.speed.next();
-                                state.last_advance_time = Instant::now();
-                            }
-                            KeyCode::Char('-') => {
-                                state.speed = state.speed.prev();
-                                state.last_advance_time = Instant::now();
-                            }
-                            _ => {}
-                        },
-                        AppMode::Live => {
-                            if app.view_state.filter_active {
-                                let previous_filter = app.view_state.filter.clone();
-                                match key_event.code {
-                                    KeyCode::Char(ch) => {
-                                        app.view_state.filter.push(ch);
-                                    }
-                                    KeyCode::Backspace => {
-                                        app.view_state.filter.pop();
-                                    }
-                                    KeyCode::Esc => {
+                                KeyCode::Esc => {
+                                    if !app.view_state.filter.is_empty() {
                                         app.view_state.filter.clear();
-                                        app.view_state.filter_active = false;
-                                    }
-                                    KeyCode::Enter => {
-                                        app.view_state.filter_active = false;
-                                    }
-                                    _ => {}
-                                }
-                                if app.view_state.filter != previous_filter {
-                                    app.view_state.selected = 0;
-                                }
-                            } else {
-                                match key_event.code {
-                                    KeyCode::Char('q') => {
+                                        app.view_state.selected = 0;
+                                    } else {
                                         monitor::request_shutdown();
                                         app.running = false;
                                     }
-                                    KeyCode::Esc => {
-                                        if !app.view_state.filter.is_empty() {
-                                            app.view_state.filter.clear();
-                                            app.view_state.selected = 0;
-                                        } else {
-                                            monitor::request_shutdown();
-                                            app.running = false;
+                                }
+                                KeyCode::Char('/') => {
+                                    app.view_state.filter_active = true;
+                                }
+                                KeyCode::Enter => {
+                                    if let Some(process) = app.selected_process() {
+                                        app.show_cmdline = Some((
+                                            process.pid,
+                                            process.name.clone(),
+                                            process.cmdline.clone(),
+                                        ));
+                                    }
+                                }
+                                KeyCode::Char('R') => {
+                                    let recordings = app.recording_manager.list_recordings();
+                                    app.mode = AppMode::RecordingList(RecordingListState {
+                                        recordings,
+                                        selected: 0,
+                                    });
+                                }
+                                KeyCode::Tab | KeyCode::BackTab => {
+                                    if app.supervisor_mode && !app.managed_children.is_empty() {
+                                        app.focus = match app.focus {
+                                            app::FocusPane::Processes => app::FocusPane::Managed,
+                                            app::FocusPane::Managed => app::FocusPane::Processes,
+                                        };
+                                    }
+                                }
+                                KeyCode::Up => match app.focus {
+                                    app::FocusPane::Processes => {
+                                        if !app.processes.is_empty() {
+                                            app.view_state.selected =
+                                                app.view_state.selected.saturating_sub(1);
                                         }
                                     }
-                                    KeyCode::Char('/') => {
-                                        app.view_state.filter_active = true;
+                                    app::FocusPane::Managed => {
+                                        app.selected_managed =
+                                            app.selected_managed.saturating_sub(1);
                                     }
-                                    KeyCode::Enter => {
-                                        if let Some(process) = app.selected_process() {
-                                            app.show_cmdline = Some((
-                                                process.pid,
-                                                process.name.clone(),
-                                                process.cmdline.clone(),
-                                            ));
+                                },
+                                KeyCode::Down => match app.focus {
+                                    app::FocusPane::Processes => {
+                                        if !app.processes.is_empty() {
+                                            let max_index = app.processes.len().saturating_sub(1);
+                                            app.view_state.selected =
+                                                (app.view_state.selected + 1).min(max_index);
                                         }
                                     }
-                                    KeyCode::Char('R') => {
-                                        let recordings = app.recording_manager.list_recordings();
-                                        app.mode = AppMode::RecordingList(RecordingListState {
-                                            recordings,
-                                            selected: 0,
-                                        });
-                                    }
-                                    KeyCode::Tab | KeyCode::BackTab => {
-                                        if app.supervisor_mode && !app.managed_children.is_empty() {
-                                            app.focus = match app.focus {
-                                                app::FocusPane::Processes => {
-                                                    app::FocusPane::Managed
-                                                }
-                                                app::FocusPane::Managed => {
-                                                    app::FocusPane::Processes
-                                                }
-                                            };
-                                        }
-                                    }
-                                    KeyCode::Up => match app.focus {
-                                        app::FocusPane::Processes => {
-                                            if !app.processes.is_empty() {
-                                                app.view_state.selected =
-                                                    app.view_state.selected.saturating_sub(1);
-                                            }
-                                        }
-                                        app::FocusPane::Managed => {
+                                    app::FocusPane::Managed => {
+                                        if !app.managed_children.is_empty() {
+                                            let max_index =
+                                                app.managed_children.len().saturating_sub(1);
                                             app.selected_managed =
-                                                app.selected_managed.saturating_sub(1);
+                                                (app.selected_managed + 1).min(max_index);
                                         }
-                                    },
-                                    KeyCode::Down => match app.focus {
-                                        app::FocusPane::Processes => {
-                                            if !app.processes.is_empty() {
-                                                let max_index =
-                                                    app.processes.len().saturating_sub(1);
-                                                app.view_state.selected =
-                                                    (app.view_state.selected + 1).min(max_index);
-                                            }
+                                    }
+                                },
+                                KeyCode::Char('k') => {
+                                    if app.focus == app::FocusPane::Managed {
+                                        if let Some(child) =
+                                            app.managed_children.get(app.selected_managed)
+                                        {
+                                            app.confirm_kill = Some(KillConfirmation {
+                                                target: KillTarget::Managed {
+                                                    index: child.index,
+                                                    command: child.command.clone(),
+                                                    pid: child.pid,
+                                                    pgid: child.pgid,
+                                                },
+                                            });
                                         }
-                                        app::FocusPane::Managed => {
-                                            if !app.managed_children.is_empty() {
-                                                let max_index =
-                                                    app.managed_children.len().saturating_sub(1);
-                                                app.selected_managed =
-                                                    (app.selected_managed + 1).min(max_index);
-                                            }
-                                        }
-                                    },
-                                    KeyCode::Char('k') => {
-                                        if app.focus == app::FocusPane::Managed {
-                                            if let Some(child) =
-                                                app.managed_children.get(app.selected_managed)
-                                            {
-                                                app.confirm_kill = Some(KillConfirmation {
-                                                    target: KillTarget::Managed {
-                                                        index: child.index,
-                                                        command: child.command.clone(),
-                                                        pid: child.pid,
-                                                        pgid: child.pgid,
-                                                    },
-                                                });
-                                            }
-                                        } else if let Some(process) = app.selected_process() {
-                                            let managed_target = app
-                                                .managed_children
-                                                .iter()
-                                                .find(|child| child.pid == Some(process.pid));
+                                    } else if let Some(process) = app.selected_process() {
+                                        let managed_target = app
+                                            .managed_children
+                                            .iter()
+                                            .find(|child| child.pid == Some(process.pid));
 
-                                            if let Some(child) = managed_target {
-                                                app.confirm_kill = Some(KillConfirmation {
-                                                    target: KillTarget::Managed {
-                                                        index: child.index,
-                                                        command: child.command.clone(),
-                                                        pid: child.pid,
-                                                        pgid: child.pgid,
-                                                    },
-                                                });
-                                            } else {
-                                                app.confirm_kill = Some(KillConfirmation {
-                                                    target: KillTarget::Process {
-                                                        pid: process.pid,
-                                                        name: process.name.clone(),
-                                                        is_system: process.is_system,
-                                                    },
-                                                });
-                                            }
+                                        if let Some(child) = managed_target {
+                                            app.confirm_kill = Some(KillConfirmation {
+                                                target: KillTarget::Managed {
+                                                    index: child.index,
+                                                    command: child.command.clone(),
+                                                    pid: child.pid,
+                                                    pgid: child.pgid,
+                                                },
+                                            });
                                         } else {
-                                            app.set_status_message(
-                                                "No process selected".to_string(),
-                                            );
+                                            app.confirm_kill = Some(KillConfirmation {
+                                                target: KillTarget::Process {
+                                                    pid: process.pid,
+                                                    name: process.name.clone(),
+                                                    is_system: process.is_system,
+                                                },
+                                            });
                                         }
+                                    } else {
+                                        app.set_status_message("No process selected".to_string());
                                     }
-                                    KeyCode::Char('w') => {
-                                        app.toggle_watch();
-                                    }
-                                    KeyCode::Char('s') => {
-                                        app.view_state.sort_column =
-                                            next_sort_column(app.view_state.sort_column);
-                                    }
-                                    KeyCode::Char('S') => {
+                                }
+                                KeyCode::Char('w') => {
+                                    app.toggle_watch();
+                                }
+                                KeyCode::Char('s') => {
+                                    app.view_state.sort_column =
+                                        next_sort_column(app.view_state.sort_column);
+                                }
+                                KeyCode::Char('S') => {
+                                    app.view_state.sort_ascending = !app.view_state.sort_ascending;
+                                }
+                                KeyCode::Char('r') => {
+                                    if app.focus == app::FocusPane::Managed {
+                                        if let Some(child) =
+                                            app.managed_children.get(app.selected_managed)
+                                        {
+                                            if child.pid.is_some() {
+                                                app.restart_requested = Some(child.index);
+                                                app.set_status_message(format!(
+                                                    "Restarting '{}'...",
+                                                    child.command
+                                                ));
+                                            } else {
+                                                app.set_status_message(
+                                                    "Process not running".to_string(),
+                                                );
+                                            }
+                                        }
+                                    } else {
                                         app.view_state.sort_ascending =
                                             !app.view_state.sort_ascending;
                                     }
-                                    KeyCode::Char('r') => {
-                                        if app.focus == app::FocusPane::Managed {
-                                            if let Some(child) =
-                                                app.managed_children.get(app.selected_managed)
-                                            {
-                                                if child.pid.is_some() {
-                                                    app.restart_requested = Some(child.index);
-                                                    app.set_status_message(format!(
-                                                        "Restarting '{}'...",
-                                                        child.command
-                                                    ));
-                                                } else {
-                                                    app.set_status_message(
-                                                        "Process not running".to_string(),
-                                                    );
-                                                }
-                                            }
-                                        } else {
-                                            app.view_state.sort_ascending =
-                                                !app.view_state.sort_ascending;
-                                        }
-                                    }
-                                    KeyCode::Char('l') => {
-                                        if app.focus == app::FocusPane::Managed {
-                                            if let Some(child) =
-                                                app.managed_children.get(app.selected_managed)
-                                            {
-                                                if let Some(ref log_path) = child.log_path {
-                                                    match std::fs::read_to_string(log_path) {
-                                                        Ok(content) => {
-                                                            let lines: Vec<&str> =
-                                                                content.lines().collect();
-                                                            let start =
-                                                                lines.len().saturating_sub(50);
-                                                            let tail = lines[start..].join("\n");
-                                                            app.show_log = Some((
-                                                                format!(
-                                                                    "{} — {}",
-                                                                    child.command,
-                                                                    log_path.display()
-                                                                ),
-                                                                tail,
-                                                            ));
-                                                        }
-                                                        Err(e) => app.set_status_message(format!(
-                                                            "Cannot read log: {e}"
-                                                        )),
+                                }
+                                KeyCode::Char('l') => {
+                                    if app.focus == app::FocusPane::Managed {
+                                        if let Some(child) =
+                                            app.managed_children.get(app.selected_managed)
+                                        {
+                                            if let Some(ref log_path) = child.log_path {
+                                                match std::fs::read_to_string(log_path) {
+                                                    Ok(content) => {
+                                                        let lines: Vec<&str> =
+                                                            content.lines().collect();
+                                                        let start = lines.len().saturating_sub(50);
+                                                        let tail = lines[start..].join("\n");
+                                                        app.show_log = Some((
+                                                            format!(
+                                                                "{} — {}",
+                                                                child.command,
+                                                                log_path.display()
+                                                            ),
+                                                            tail,
+                                                        ));
                                                     }
-                                                } else {
-                                                    app.set_status_message(
-                                                        "No log file (headless mode)".to_string(),
-                                                    );
+                                                    Err(e) => app.set_status_message(format!(
+                                                        "Cannot read log: {e}"
+                                                    )),
                                                 }
+                                            } else {
+                                                app.set_status_message(
+                                                    "No log file (headless mode)".to_string(),
+                                                );
                                             }
                                         }
                                     }
-                                    _ => {}
                                 }
+                                _ => {}
                             }
                         }
                     }
+                }
 
-                    if exit_replay {
-                        app.mode = AppMode::Live;
-                    }
+                if exit_replay {
+                    app.mode = AppMode::Live;
+                }
 
-                    if let Some(recording_id) = recording_to_load {
-                        match app.recording_manager.load_recording(&recording_id) {
-                            Ok(recording) => {
-                                if recording.snapshots.is_empty() {
-                                    app.set_status_message(
-                                        "Recording has no snapshots".to_string(),
-                                    );
-                                } else {
-                                    app.mode = AppMode::Replay(ReplayState {
-                                        recording,
-                                        current_index: 0,
-                                        speed: PlaybackSpeed::Normal,
-                                        playing: false,
-                                        last_advance_time: Instant::now(),
-                                    });
-                                }
-                            }
-                            Err(error) => {
-                                app.set_status_message(format!(
-                                    "Failed to load recording: {}",
-                                    error
-                                ));
-                            }
-                        }
-                    } else if let Some(recording_id) = recording_to_delete {
-                        if let Err(error) = app.recording_manager.delete_recording(&recording_id) {
-                            app.set_status_message(format!(
-                                "Failed to delete recording: {}",
-                                error
-                            ));
-                        }
-                        if was_recording_list {
-                            let recordings = app.recording_manager.list_recordings();
-                            let selected = if recordings.is_empty() {
-                                0
+                if let Some(recording_id) = recording_to_load {
+                    match app.recording_manager.load_recording(&recording_id) {
+                        Ok(recording) => {
+                            if recording.snapshots.is_empty() {
+                                app.set_status_message("Recording has no snapshots".to_string());
                             } else {
-                                list_selected.min(recordings.len().saturating_sub(1))
-                            };
-                            app.mode = AppMode::RecordingList(RecordingListState {
-                                recordings,
-                                selected,
-                            });
+                                app.mode = AppMode::Replay(ReplayState {
+                                    recording,
+                                    current_index: 0,
+                                    speed: PlaybackSpeed::Normal,
+                                    playing: false,
+                                    last_advance_time: Instant::now(),
+                                });
+                            }
                         }
-                    } else if close_recording_list {
-                        app.mode = AppMode::Live;
+                        Err(error) => {
+                            app.set_status_message(format!("Failed to load recording: {}", error));
+                        }
                     }
+                } else if let Some(recording_id) = recording_to_delete {
+                    if let Err(error) = app.recording_manager.delete_recording(&recording_id) {
+                        app.set_status_message(format!("Failed to delete recording: {}", error));
+                    }
+                    if was_recording_list {
+                        let recordings = app.recording_manager.list_recordings();
+                        let selected = if recordings.is_empty() {
+                            0
+                        } else {
+                            list_selected.min(recordings.len().saturating_sub(1))
+                        };
+                        app.mode = AppMode::RecordingList(RecordingListState {
+                            recordings,
+                            selected,
+                        });
+                    }
+                } else if close_recording_list {
+                    app.mode = AppMode::Live;
                 }
             }
         }
