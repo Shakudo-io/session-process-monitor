@@ -1,9 +1,9 @@
 [package]
 name = "session-process-monitor"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 authors = ["Shakudo Inc."]
-description = "Terminal UI for monitoring per-process memory, CPU, and disk I/O in Kubernetes session pods"
+description = "Process supervisor and TUI for monitoring memory, CPU, and disk I/O in Kubernetes pods — with preemptive OOM guard"
 license = "Apache-2.0"
 repository = "https://github.com/Shakudo-io/session-process-monitor"
 keywords = ["tui", "monitoring", "kubernetes", "process", "profiling"]
