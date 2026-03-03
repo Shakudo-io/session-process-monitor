@@ -559,7 +559,7 @@ dependencies = [
 
 [[package]]
 name = "session-process-monitor"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "bincode",
  "clap",
