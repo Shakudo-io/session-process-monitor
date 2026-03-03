@@ -1,72 +1,145 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Gauge, Paragraph, Row, Table, TableState};
 use ratatui::Frame;
 
-use crate::app::{App, PodMemorySnapshot, ProcessSnapshot, SortColumn};
+use crate::app::{App, GuardAlert, KillTarget, PodMemorySnapshot, ProcessSnapshot, SortColumn};
+use crate::health::HealthStatus;
 use crate::replay::{AppMode, RecordingListState, ReplayState};
+use crate::supervisor::ChildState;
 
-const BG: Color = Color::Rgb(24, 24, 32);
-const BG_ALT: Color = Color::Rgb(32, 32, 42);
-const FG: Color = Color::Rgb(200, 200, 210);
-const FG_DIM: Color = Color::Rgb(100, 100, 120);
-const BORDER: Color = Color::Rgb(60, 60, 80);
-const ACCENT: Color = Color::Rgb(100, 160, 255);
-const HIGHLIGHT_BG: Color = Color::Rgb(50, 50, 70);
+#[derive(Clone, Copy)]
+struct Theme {
+    bg: Color,
+    bg_alt: Color,
+    fg: Color,
+    fg_dim: Color,
+    border: Color,
+    accent: Color,
+    highlight_bg: Color,
+}
 
-pub fn draw(frame: &mut Frame, app: &App) {
-    match &app.mode {
-        AppMode::Replay(state) => draw_replay(frame, app, state),
-        _ => draw_live(frame, app),
+impl Theme {
+    fn dark() -> Self {
+        Self {
+            bg: Color::Rgb(24, 24, 32),
+            bg_alt: Color::Rgb(32, 32, 42),
+            fg: Color::Rgb(200, 200, 210),
+            fg_dim: Color::Rgb(100, 100, 120),
+            border: Color::Rgb(60, 60, 80),
+            accent: Color::Rgb(100, 160, 255),
+            highlight_bg: Color::Rgb(50, 50, 70),
+        }
     }
 
-    if let AppMode::RecordingList(list_state) = &app.mode {
-        draw_recording_list_modal(frame, list_state);
-    }
-
-    if let Some((pid, name, cmdline)) = &app.show_cmdline {
-        draw_cmdline_modal(frame, *pid, name, cmdline);
+    fn light() -> Self {
+        Self {
+            bg: Color::Reset,
+            bg_alt: Color::Reset,
+            fg: Color::Reset,
+            fg_dim: Color::DarkGray,
+            border: Color::DarkGray,
+            accent: Color::Cyan,
+            highlight_bg: Color::DarkGray,
+        }
     }
 }
 
-fn draw_live(frame: &mut Frame, app: &App) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(1),
-            Constraint::Length(3),
-        ])
-        .split(frame.area());
+fn theme(app: &App) -> Theme {
+    if app.dark_mode {
+        Theme::dark()
+    } else {
+        Theme::light()
+    }
+}
+
+pub fn draw(frame: &mut Frame, app: &App) {
+    let theme = theme(app);
+    match &app.mode {
+        AppMode::Replay(state) => draw_replay(frame, app, state, &theme),
+        _ => draw_live(frame, app, &theme),
+    }
+
+    if let AppMode::RecordingList(list_state) = &app.mode {
+        draw_recording_list_modal(frame, list_state, &theme);
+    }
+
+    if let Some((pid, name, cmdline)) = &app.show_cmdline {
+        draw_cmdline_modal(frame, *pid, name, cmdline, &theme);
+    }
+}
+
+fn draw_live(frame: &mut Frame, app: &App, theme: &Theme) {
+    let (gauge_area, managed_area, table_area, status_area) = if app.supervisor_mode {
+        let managed_height = managed_pane_height(app);
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(managed_height),
+                Constraint::Min(1),
+                Constraint::Length(3),
+            ])
+            .split(frame.area());
+        (chunks[0], Some(chunks[1]), chunks[2], chunks[3])
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(1),
+                Constraint::Length(3),
+            ])
+            .split(frame.area());
+        (chunks[0], None, chunks[1], chunks[2])
+    };
 
     render_gauges(
         frame,
-        chunks[0],
+        gauge_area,
         &app.pod_memory,
         &app.processes,
         app.cpu_cores,
+        theme,
     );
+
+    if let Some(area) = managed_area {
+        render_managed_processes(frame, area, app, theme);
+    }
+
     render_process_table(
         frame,
-        chunks[1],
+        table_area,
         &app.processes,
         app.view_state.sort_column,
         app.view_state.sort_ascending,
         Some(app.view_state.selected),
         &app.watched_pids,
+        theme,
     );
 
     let (status_text, status_style) = status_line(app);
-    let status = Paragraph::new(status_text).style(status_style).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(BORDER))
-            .style(Style::default().bg(BG)),
-    );
-    frame.render_widget(status, chunks[2]);
+    let status_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme.border))
+        .style(Style::default().bg(theme.bg));
+
+    if app.supervisor_mode {
+        let guard_line = guard_status_line(app);
+        let status = Paragraph::new(vec![Line::styled(status_text, status_style), guard_line])
+            .style(Style::default().bg(theme.bg))
+            .block(status_block);
+        frame.render_widget(status, status_area);
+    } else {
+        let status = Paragraph::new(status_text)
+            .style(status_style)
+            .block(status_block);
+        frame.render_widget(status, status_area);
+    }
 }
 
-fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
+fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState, theme: &Theme) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -102,8 +175,8 @@ fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
     );
     let header = Paragraph::new(header_text).style(
         Style::default()
-            .fg(ACCENT)
-            .bg(BG_ALT)
+            .fg(theme.accent)
+            .bg(theme.bg_alt)
             .add_modifier(Modifier::BOLD),
     );
     frame.render_widget(header, chunks[0]);
@@ -115,6 +188,7 @@ fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
             &snapshot.pod_memory,
             &snapshot.processes,
             snapshot.cpu_cores,
+            theme,
         );
         render_process_table(
             frame,
@@ -124,23 +198,24 @@ fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
             app.view_state.sort_ascending,
             Some(app.view_state.selected),
             &app.watched_pids,
+            theme,
         );
     } else {
         let placeholder = Paragraph::new("Recording has no snapshots.")
-            .style(Style::default().fg(Color::Yellow).bg(BG))
+            .style(Style::default().fg(Color::Yellow).bg(theme.bg))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(BORDER))
+                    .border_style(Style::default().fg(theme.border))
                     .title("Replay")
-                    .style(Style::default().bg(BG)),
+                    .style(Style::default().bg(theme.bg)),
             );
         frame.render_widget(placeholder, chunks[2]);
         frame.render_widget(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(BORDER))
-                .style(Style::default().bg(BG)),
+                .border_style(Style::default().fg(theme.border))
+                .style(Style::default().bg(theme.bg)),
             chunks[1],
         );
     }
@@ -149,31 +224,31 @@ fn draw_replay(frame: &mut Frame, app: &App, state: &ReplayState) {
     let status = Paragraph::new(status_text).style(status_style).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(BORDER))
-            .style(Style::default().bg(BG)),
+            .border_style(Style::default().fg(theme.border))
+            .style(Style::default().bg(theme.bg)),
     );
     frame.render_widget(status, chunks[3]);
 }
 
-fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState) {
+fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState, theme: &Theme) {
     let area = centered_rect(80, 60, frame.area());
     frame.render_widget(Clear, area);
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
+        .border_style(Style::default().fg(theme.accent))
         .title("Recordings (Enter: select, d: delete, Esc: close)")
         .title_style(
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
-        .style(Style::default().bg(BG));
+        .style(Style::default().bg(theme.bg));
 
     if list_state.recordings.is_empty() {
         let empty =
             Paragraph::new("No recordings available. Recordings are saved when processes exit.")
-                .style(Style::default().fg(FG_DIM))
+                .style(Style::default().fg(theme.fg_dim))
                 .block(block);
         frame.render_widget(empty, area);
         return;
@@ -181,8 +256,8 @@ fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState)
 
     let header = Row::new(vec!["Time", "Process", "Snapshots"]).style(
         Style::default()
-            .fg(ACCENT)
-            .bg(BG_ALT)
+            .fg(theme.accent)
+            .bg(theme.bg_alt)
             .add_modifier(Modifier::BOLD),
     );
     let rows = list_state.recordings.iter().map(|recording| {
@@ -204,7 +279,7 @@ fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState)
     .header(header)
     .block(block)
     .column_spacing(1)
-    .row_highlight_style(Style::default().bg(HIGHLIGHT_BG).fg(Color::White));
+    .row_highlight_style(Style::default().bg(theme.highlight_bg).fg(Color::White));
 
     let mut table_state = TableState::default();
     if !list_state.recordings.is_empty() {
@@ -216,24 +291,24 @@ fn draw_recording_list_modal(frame: &mut Frame, list_state: &RecordingListState)
     frame.render_stateful_widget(table, area, &mut table_state);
 }
 
-fn draw_cmdline_modal(frame: &mut Frame, pid: u32, name: &str, cmdline: &str) {
+fn draw_cmdline_modal(frame: &mut Frame, pid: u32, name: &str, cmdline: &str, theme: &Theme) {
     let area = centered_rect(80, 40, frame.area());
     frame.render_widget(Clear, area);
 
     let title = format!("PID {} — {} (any key to close)", pid, name);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(ACCENT))
+        .border_style(Style::default().fg(theme.accent))
         .title(title)
         .title_style(
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         )
-        .style(Style::default().bg(BG));
+        .style(Style::default().bg(theme.bg));
 
     let content = Paragraph::new(cmdline.to_string())
-        .style(Style::default().fg(FG))
+        .style(Style::default().fg(theme.fg))
         .wrap(ratatui::widgets::Wrap { trim: false })
         .block(block);
     frame.render_widget(content, area);
@@ -245,6 +320,7 @@ fn render_gauges(
     pod_memory: &PodMemorySnapshot,
     processes: &[ProcessSnapshot],
     cpu_cores: Option<f64>,
+    theme: &Theme,
 ) {
     let gauge_chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -254,10 +330,10 @@ fn render_gauges(
     let mem_state = memory_gauge_state(pod_memory);
     let mem_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
+        .border_style(Style::default().fg(theme.border))
         .title("Pod Memory")
-        .title_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(BG));
+        .title_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.bg));
     let mem_gauge = Gauge::default()
         .block(mem_block.clone())
         .ratio(mem_state.ratio)
@@ -271,10 +347,10 @@ fn render_gauges(
     let cpu_state = cpu_gauge_state(processes, cpu_cores);
     let cpu_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER))
+        .border_style(Style::default().fg(theme.border))
         .title("CPU Usage")
-        .title_style(Style::default().fg(ACCENT))
-        .style(Style::default().bg(BG));
+        .title_style(Style::default().fg(theme.accent))
+        .style(Style::default().bg(theme.bg));
     let cpu_gauge = Gauge::default()
         .block(cpu_block)
         .ratio(cpu_state.ratio)
@@ -291,6 +367,7 @@ fn render_process_table(
     sort_ascending: bool,
     selected: Option<usize>,
     watched_pids: &std::collections::HashSet<u32>,
+    theme: &Theme,
 ) {
     let header = Row::new(vec![
         header_label("PID", SortColumn::Pid, sort_column, sort_ascending),
@@ -311,19 +388,19 @@ fn render_process_table(
     ])
     .style(
         Style::default()
-            .fg(ACCENT)
-            .bg(BG_ALT)
+            .fg(theme.accent)
+            .bg(theme.bg_alt)
             .add_modifier(Modifier::BOLD),
     );
 
     let rows = processes.iter().map(|process| {
         let style = if process.is_system {
             Style::default()
-                .fg(FG_DIM)
-                .bg(BG)
+                .fg(theme.fg_dim)
+                .bg(theme.bg)
                 .add_modifier(Modifier::DIM)
         } else {
-            Style::default().fg(FG).bg(BG)
+            Style::default().fg(theme.fg).bg(theme.bg)
         };
 
         let growth_text = match process.growth_rate {
@@ -388,13 +465,13 @@ fn render_process_table(
     .block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(BORDER))
+            .border_style(Style::default().fg(theme.border))
             .title("Processes")
-            .title_style(Style::default().fg(ACCENT))
-            .style(Style::default().bg(BG)),
+            .title_style(Style::default().fg(theme.accent))
+            .style(Style::default().bg(theme.bg)),
     )
     .column_spacing(1)
-    .row_highlight_style(Style::default().bg(HIGHLIGHT_BG).fg(Color::White));
+    .row_highlight_style(Style::default().bg(theme.highlight_bg).fg(Color::White));
 
     let mut table_state = TableState::default();
     if !processes.is_empty() {
@@ -532,19 +609,45 @@ fn render_danger_marker(frame: &mut Frame, area: Rect, block: &Block, percent: u
 
 fn status_line(app: &App) -> (String, Style) {
     if let Some(confirm) = &app.confirm_kill {
-        if confirm.is_system {
-            return (
-                format!(
-                    "⚠ SYSTEM PROCESS — Kill {} {}? This may break the session. (y/n)",
-                    confirm.pid, confirm.name
-                ),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            );
+        match &confirm.target {
+            KillTarget::Process {
+                pid,
+                name,
+                is_system,
+            } => {
+                if *is_system {
+                    return (
+                        format!(
+                            "⚠ SYSTEM PROCESS — Kill {} {}? This may break the session. (y/n)",
+                            pid, name
+                        ),
+                        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                    );
+                }
+                return (
+                    format!("Kill process {} {}? (y/n)", pid, name),
+                    Style::default().fg(Color::Yellow),
+                );
+            }
+            KillTarget::Managed {
+                index,
+                command,
+                pid,
+                ..
+            } => {
+                let cmd = truncate_command(command, 40);
+                let pid_label = pid
+                    .map(|value| format!(" (PID {})", value))
+                    .unwrap_or_default();
+                return (
+                    format!(
+                        "Kill managed process #{} {}{}? (y/n)",
+                        index, cmd, pid_label
+                    ),
+                    Style::default().fg(Color::Yellow),
+                );
+            }
         }
-        return (
-            format!("Kill process {} {}? (y/n)", confirm.pid, confirm.name),
-            Style::default().fg(Color::Yellow),
-        );
     }
 
     if app.view_state.filter_active {
@@ -574,7 +677,11 @@ fn status_line(app: &App) -> (String, Style) {
         )
     };
 
-    let keys = "q: quit | k: kill | w: watch | R: recordings | s: sort | /: filter | ↑/↓: select";
+    let keys = if app.supervisor_mode {
+        "q: quit | k: kill | Tab: switch pane | w: watch | R: recordings | s: sort | /: filter"
+    } else {
+        "q: quit | k: kill | w: watch | R: recordings | s: sort | /: filter | ↑/↓: select"
+    };
 
     if !app.view_state.filter.trim().is_empty() {
         return (
@@ -590,6 +697,178 @@ fn status_line(app: &App) -> (String, Style) {
         format!("{}{}", recording_label, keys),
         Style::default().fg(Color::Gray),
     )
+}
+
+fn guard_status_line(app: &App) -> Line<'_> {
+    let guard = match &app.guard {
+        Some(guard) => guard,
+        None => {
+            return Line::from(vec![
+                Span::raw("🛡 Guard: "),
+                Span::styled("OFF", Style::default().fg(Color::Gray)),
+            ])
+        }
+    };
+
+    if !guard.config.enabled {
+        return Line::from(vec![
+            Span::raw("🛡 Guard: "),
+            Span::styled("OFF", Style::default().fg(Color::Gray)),
+        ]);
+    }
+
+    match &app.guard_alert {
+        Some(GuardAlert::Exhausted { .. }) => Line::from(vec![
+            Span::raw("🛡 Guard: "),
+            Span::styled("EXHAUSTED", Style::default().fg(Color::Red)),
+            Span::raw(" — all managed killed"),
+        ]),
+        Some(GuardAlert::Triggered {
+            percent,
+            ticks_remaining,
+        }) => {
+            let grace_ticks = guard.config.grace_ticks.max(1);
+            let ticks_elapsed = grace_ticks.saturating_sub(*ticks_remaining);
+            Line::from(vec![
+                Span::raw("🛡 Guard: "),
+                Span::styled("TRIGGERED", Style::default().fg(Color::Yellow)),
+                Span::raw(format!(
+                    " ({:.0}%, {}/{} ticks)",
+                    percent.round(),
+                    ticks_elapsed,
+                    grace_ticks
+                )),
+            ])
+        }
+        None => {
+            let percent = pod_memory_percent(app).unwrap_or(0.0);
+            Line::from(vec![
+                Span::raw("🛡 Guard: "),
+                Span::styled("ARMED", Style::default().fg(Color::Green)),
+                Span::raw(format!(
+                    " ({:.0}%) | {} kills",
+                    percent.round(),
+                    guard.total_kills
+                )),
+            ])
+        }
+    }
+}
+
+fn pod_memory_percent(app: &App) -> Option<f64> {
+    let limit = app.pod_memory.cgroup_limit?;
+    if limit == 0 {
+        return None;
+    }
+    Some((app.pod_memory.cgroup_usage as f64 / limit as f64) * 100.0)
+}
+
+fn managed_pane_height(app: &App) -> u16 {
+    let count = app.managed_children.len().min(u16::MAX as usize) as u16;
+    let height = count.saturating_add(3);
+    height.clamp(3, 10)
+}
+
+fn render_managed_processes(frame: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let header = Row::new(vec![
+        "#".to_string(),
+        "Command".to_string(),
+        "State".to_string(),
+        "USS".to_string(),
+        "Health".to_string(),
+        "Restarts".to_string(),
+    ])
+    .style(
+        Style::default()
+            .fg(theme.accent)
+            .add_modifier(Modifier::BOLD),
+    );
+
+    let rows = app.managed_children.iter().map(|child| {
+        let command = truncate_command(&child.command, 30);
+        let state = child_state_label(&child.state);
+        let health = health_label(&child.health.status, child.health.port);
+
+        Row::new(vec![
+            child.index.to_string(),
+            command,
+            state,
+            format_bytes(child.total_uss),
+            health,
+            child.restart_count.to_string(),
+        ])
+    });
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(3),
+            Constraint::Min(30),
+            Constraint::Length(12),
+            Constraint::Length(10),
+            Constraint::Length(12),
+            Constraint::Length(8),
+        ],
+    )
+    .header(header)
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(
+                Style::default().fg(if app.focus == crate::app::FocusPane::Managed {
+                    theme.accent
+                } else {
+                    theme.border
+                }),
+            )
+            .title(if app.focus == crate::app::FocusPane::Managed {
+                "Managed Processes [focused]"
+            } else {
+                "Managed Processes [Tab to focus]"
+            }),
+    )
+    .column_spacing(1)
+    .row_highlight_style(Style::default().bg(theme.highlight_bg).fg(Color::White));
+
+    let mut table_state = TableState::default();
+    if app.focus == crate::app::FocusPane::Managed && !app.managed_children.is_empty() {
+        table_state.select(Some(app.selected_managed));
+    }
+    frame.render_stateful_widget(table, area, &mut table_state);
+}
+
+fn child_state_label(state: &ChildState) -> String {
+    match state {
+        ChildState::Running => "Running".to_string(),
+        ChildState::Stopping { .. } => "Stopping".to_string(),
+        ChildState::Restarting => "Restarting".to_string(),
+        ChildState::Completed => "Completed".to_string(),
+        ChildState::Failed => "Failed".to_string(),
+        ChildState::Stopped => "Stopped".to_string(),
+    }
+}
+
+fn health_label(status: &HealthStatus, port: Option<u16>) -> String {
+    match status {
+        HealthStatus::Healthy => match port {
+            Some(port) => format!("✓ :{}", port),
+            None => "✓".to_string(),
+        },
+        HealthStatus::Unhealthy => match port {
+            Some(port) => format!("✗ :{}", port),
+            None => "✗".to_string(),
+        },
+        HealthStatus::Discovering | HealthStatus::Probing => "⋯".to_string(),
+        HealthStatus::NotApplicable => "—".to_string(),
+    }
+}
+
+fn truncate_command(command: &str, max_len: usize) -> String {
+    if command.len() > max_len {
+        format!("{}...", &command[..max_len.saturating_sub(3)])
+    } else {
+        command.to_string()
+    }
 }
 
 fn header_label(
