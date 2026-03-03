@@ -42,9 +42,9 @@ struct Cli {
     #[arg(long, global = true)]
     replay: Option<String>,
 
-    /// Enable dark mode theme
+    /// Enable light mode theme (dark is default)
     #[arg(long, global = true)]
-    dark: bool,
+    light: bool,
 }
 
 #[derive(Subcommand, Debug, Clone)]
@@ -450,7 +450,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = TuiConfig {
         record: cli.record,
         replay: cli.replay.clone(),
-        dark_mode: cli.dark,
+        dark_mode: !cli.light,
     };
     match cli.command {
         None => run_tui(config),
