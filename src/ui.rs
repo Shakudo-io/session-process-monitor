@@ -23,13 +23,13 @@ struct Theme {
 impl Theme {
     fn dark() -> Self {
         Self {
-            bg: Color::Rgb(24, 24, 32),
-            bg_alt: Color::Rgb(32, 32, 42),
+            bg: Color::Black,
+            bg_alt: Color::Black,
             fg: Color::Rgb(200, 200, 210),
             fg_dim: Color::Rgb(100, 100, 120),
             border: Color::Rgb(60, 60, 80),
             accent: Color::Rgb(100, 160, 255),
-            highlight_bg: Color::Rgb(50, 50, 70),
+            highlight_bg: Color::Rgb(40, 40, 50),
         }
     }
 
